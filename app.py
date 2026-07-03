@@ -12,36 +12,26 @@ PIXELS_PER_CM = 18.5
 
 st.set_page_config(page_title="Broiler Morphometrics", layout="centered")
 
-# --- TARGETED CSS FIX: STRIP GREY MASKS, PRESERVE BUTTONS ---
+# --- CUSTOM CLEAN WEB LAYOUT CSS ---
 st.markdown("""
     <style>
-    /* 1. Only remove the specific background grids, NOT the buttons/text */
-    [data-testid="stCameraInput"] line,
-    [data-testid="stCameraInput"] circle,
-    [data-testid="stCameraInput"] path:not([fill*="currentColor"]) { 
-        display: none !important; 
+    /* 1. Only hide the central overlay reticle grid, leaving utility icons intact */
+    [data-testid="stCameraInput"] video + div svg {
+        display: none !important;
     }
     
-    /* 2. Force container backgrounds and dark backdrop filters to be transparent */
-    [data-testid="stCameraInput"], 
+    /* 2. Strip out all dark shading bars and blur filters from the viewport layout */
     [data-testid="stCameraInput"] > div,
-    [data-testid="stCameraInput"] > div > div {
+    [data-testid="stCameraInput"] div div,
+    [data-testid="stCameraInput"] [style*="backdrop-filter"] {
         background-color: transparent !important;
         background: transparent !important;
         backdrop-filter: none !important;
         -webkit-backdrop-filter: none !important;
         box-shadow: none !important;
     }
-    
-    /* 3. Re-align and boost visibility of the browser's native text and permission links */
-    [data-testid="stCameraInput"] button,
-    [data-testid="stCameraInput"] a {
-        position: relative;
-        z-index: 10000 !important;
-        color: #00BFFF !important;
-    }
 
-    /* 4. Electronically draw your clear blue 1-Meter Guide Box on the top layer */
+    /* 3. Render the clear bright blue 1-Meter Guide Box perfectly on top */
     [data-testid="stCameraInput"] { position: relative; }
     [data-testid="stCameraInput"]::after {
         content: "ALIGN CHICKEN IN THIS BOX (1 METER)";
@@ -62,8 +52,6 @@ st.write("1-Meter Calibrated Length & Surface Area Segmentation")
 
 # --- CAMERA INPUT ---
 st.info("Step 1: Align the chicken inside the clear blue dashed box at exactly 1 meter distance.")
-
-# Removed the broken facing_mode argument to stop the TypeError crash completely
 img_file = st.camera_input("Capture Broiler Image")
 
 if img_file is not None:
@@ -79,11 +67,13 @@ if img_file is not None:
     
     st.write(f"Drag the red box to tightly enclose the **{feature_type}**.")
 
-    # INTERACTIVE BOUNDING BOX
+    # INTERACTIVE BOUNDING BOX (Returns cropped PIL image)
     cropped_feature = st_cropper(raw_pil_image, realtime_update=True, box_color='#FF0000', aspect_ratio=None)
     
     if cropped_feature:
+        # Convert PIL to numpy array safely
         feature_cv2 = np.array(cropped_feature)
+        # Convert from RGB (PIL format) to BGR (OpenCV format)
         feature_cv2 = cv2.cvtColor(feature_cv2, cv2.COLOR_RGB2BGR)
         
         # --- LOW-LIGHT NOISE FILTERING & MASK SEGMENTATION ---
@@ -93,11 +83,11 @@ if img_file is not None:
         kernel = np.ones((5,5), np.uint8)
         clean_mask = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
         
-        # --- PARAMETER 1: AUTOMATED SURFACE AREA CALCULATION ---
+        # --- METRIC 1: SURFACE AREA CALCULATION FROM EXTRACTED MASK ---
         total_mask_pixels = np.sum(clean_mask == 255)
         measured_area_cm2 = total_mask_pixels / (PIXELS_PER_CM ** 2)
         
-        # --- PARAMETER 2: AUTOMATED SKELETON LENGTH CALCULATION ---
+        # --- METRIC 2: SKELETONIZED LENGTH VECTOR EXTRACTION ---
         binary_input = clean_mask // 255
         skeleton = skeletonize(binary_input)
         skeleton_output = (skeleton * 255).astype(np.uint8)
@@ -108,29 +98,36 @@ if img_file is not None:
             coords = np.column_stack((x_indices, y_indices))
             dist_matrix = np.sum((coords[:, None, :] - coords[None, :, :]) ** 2, axis=-1)
             max_idx = np.unravel_index(np.argmax(dist_matrix), dist_matrix.shape)
-            pt1 = tuple(coords[max_idx[0]])
-            pt2 = tuple(coords[max_idx[1]])
             
+            # CRITICAL FIX: Explicitly cast coordinates to pure integers to prevent drawing crash
+            pt1 = (int(coords[max_idx[0]][0]), int(coords[max_idx[0]][1]))
+            pt2 = (int(coords[max_idx[1]][0]), int(coords[max_idx[1]][1]))
+            
+            # Map tracking layout onto frame safely
             visual_output = feature_cv2.copy()
-            cv2.line(visual_output, pt1, pt2, (255, 0, 0), 3)
-            cv2.circle(visual_output, pt1, 6, (0, 255, 0), -1)
-            cv2.circle(visual_output, pt2, 6, (0, 255, 0), -1)
+            cv2.line(visual_output, pt1, pt2, (255, 0, 0), 3)       # Blue topological span vector
+            cv2.circle(visual_output, pt1, 6, (0, 255, 0), -1)      # Endpoint node 1
+            cv2.circle(visual_output, pt2, 6, (0, 255, 0), -1)      # Endpoint node 2
             
+            # Math conversion
             pixel_distance = np.sqrt((pt1[0] - pt2[0])**2 + (pt1[1] - pt2[1])**2)
             automated_length_cm = pixel_distance / PIXELS_PER_CM
             
             st.write("### Processing & Segmentation Results")
             col_img1, col_img2 = st.columns(2)
             with col_img1:
-                st.image(visual_output, channels="BGR", caption=f"Measured {feature_type} Axis")
+                # Convert back to RGB for crisp, true-color Streamlit display presentation
+                display_img = cv2.cvtColor(visual_output, cv2.COLOR_BGR2RGB)
+                st.image(display_img, caption=f"Measured {feature_type} Axis")
             with col_img2:
                 st.image(clean_mask, caption="Low-Light Filter Mask (Used for Area)")
             
+            # Metrics display parameters
             c1, c2 = st.columns(2)
             c1.metric(label="Calculated Length", value=f"{automated_length_cm:.2f} cm")
             c2.metric(label="Surface Area", value=f"{measured_area_cm2:.2f} cm²")
             
-            # --- DATA LOGGER AND EXPORT ---
+            # --- DATABASE DATA LOGGER ---
             st.divider()
             st.subheader("Step 3: Log Data")
             actual_weight = st.number_input("Actual Scale Weight (grams) for Database", min_value=0.0, step=0.1)
