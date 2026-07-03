@@ -4,3 +4,4 @@ numpy
 pandas
 streamlit-cropper
 Pillow
+scikit-image
