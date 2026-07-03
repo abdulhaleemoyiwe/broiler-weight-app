@@ -148,4 +148,9 @@ if img_file is not None:
             st.download_button(
                 label="💾 Download Morphometrics Entry (CSV)",
                 data=csv,
-                file_name=f"broiler
+                file_name=f"broiler_metrics_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                mime="text/csv",
+                type="primary"
+            )
+        else:
+            st.warning("Could not isolate a solid skeletal vector. Readjust the red crop box closer to the chicken's edge.")
