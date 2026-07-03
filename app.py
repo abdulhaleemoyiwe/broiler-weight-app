@@ -38,7 +38,7 @@ st.markdown("""
     [data-testid="stCameraInput"] a {
         position: relative;
         z-index: 10000 !important;
-        color: #00BFFF !important; /* Make link color match your theme */
+        color: #00BFFF !important;
     }
 
     /* 4. Electronically draw your clear blue 1-Meter Guide Box on the top layer */
@@ -60,11 +60,11 @@ st.markdown("""
 st.title("🐔 Automated Broiler Morphometrics")
 st.write("1-Meter Calibrated Length & Surface Area Segmentation")
 
-# --- CAMERA INPUT WITH EXPLICIT REAR BACK-CAMERA OVERRIDE ---
+# --- CAMERA INPUT ---
 st.info("Step 1: Align the chicken inside the clear blue dashed box at exactly 1 meter distance.")
 
-# Using facing_mode="environment" forces your phone web browser to utilize the back lens
-img_file = st.camera_input("Capture Broiler Image", facing_mode="environment")
+# Removed the broken facing_mode argument to stop the TypeError crash completely
+img_file = st.camera_input("Capture Broiler Image")
 
 if img_file is not None:
     raw_pil_image = Image.open(img_file)
