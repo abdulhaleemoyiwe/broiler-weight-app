@@ -12,15 +12,36 @@ PIXELS_PER_CM = 18.5
 
 st.set_page_config(page_title="Broiler Morphometrics", layout="centered")
 
-# --- CUSTOM CSS: REMOVE GRAY OVERLAY & SHOW BLUE ALIGNMENT BOX ---
+# --- TARGETED CSS FIX: STRIP GREY MASKS, PRESERVE BUTTONS ---
 st.markdown("""
     <style>
-    [data-testid="stCameraInput"] svg { 
+    /* 1. Only remove the specific background grids, NOT the buttons/text */
+    [data-testid="stCameraInput"] line,
+    [data-testid="stCameraInput"] circle,
+    [data-testid="stCameraInput"] path:not([fill*="currentColor"]) { 
         display: none !important; 
     }
-    [data-testid="stCameraInput"] > div {
+    
+    /* 2. Force container backgrounds and dark backdrop filters to be transparent */
+    [data-testid="stCameraInput"], 
+    [data-testid="stCameraInput"] > div,
+    [data-testid="stCameraInput"] > div > div {
         background-color: transparent !important;
+        background: transparent !important;
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+        box-shadow: none !important;
     }
+    
+    /* 3. Re-align and boost visibility of the browser's native text and permission links */
+    [data-testid="stCameraInput"] button,
+    [data-testid="stCameraInput"] a {
+        position: relative;
+        z-index: 10000 !important;
+        color: #00BFFF !important; /* Make link color match your theme */
+    }
+
+    /* 4. Electronically draw your clear blue 1-Meter Guide Box on the top layer */
     [data-testid="stCameraInput"] { position: relative; }
     [data-testid="stCameraInput"]::after {
         content: "ALIGN CHICKEN IN THIS BOX (1 METER)";
@@ -39,9 +60,11 @@ st.markdown("""
 st.title("🐔 Automated Broiler Morphometrics")
 st.write("1-Meter Calibrated Length & Surface Area Segmentation")
 
-# --- CAMERA INPUT ---
+# --- CAMERA INPUT WITH EXPLICIT REAR BACK-CAMERA OVERRIDE ---
 st.info("Step 1: Align the chicken inside the clear blue dashed box at exactly 1 meter distance.")
-img_file = st.camera_input("Capture Broiler Image")
+
+# Using facing_mode="environment" forces your phone web browser to utilize the back lens
+img_file = st.camera_input("Capture Broiler Image", facing_mode="environment")
 
 if img_file is not None:
     raw_pil_image = Image.open(img_file)
@@ -71,33 +94,28 @@ if img_file is not None:
         clean_mask = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
         
         # --- PARAMETER 1: AUTOMATED SURFACE AREA CALCULATION ---
-        # Count all white pixels in the low-light mask
         total_mask_pixels = np.sum(clean_mask == 255)
         measured_area_cm2 = total_mask_pixels / (PIXELS_PER_CM ** 2)
         
         # --- PARAMETER 2: AUTOMATED SKELETON LENGTH CALCULATION ---
-        binary_input = clean_mask // 255  # Convert mask to 0s and 1s for skimage
+        binary_input = clean_mask // 255
         skeleton = skeletonize(binary_input)
         skeleton_output = (skeleton * 255).astype(np.uint8)
         
-        # Extract pixel coordinates of the thinned line
         y_indices, x_indices = np.where(skeleton_output > 0)
         
         if len(x_indices) > 2:
-            # Locate furthest endpoints on the skeleton path
             coords = np.column_stack((x_indices, y_indices))
             dist_matrix = np.sum((coords[:, None, :] - coords[None, :, :]) ** 2, axis=-1)
             max_idx = np.unravel_index(np.argmax(dist_matrix), dist_matrix.shape)
             pt1 = tuple(coords[max_idx[0]])
             pt2 = tuple(coords[max_idx[1]])
             
-            # Map tracking trajectory line visually onto the original cropped image
             visual_output = feature_cv2.copy()
-            cv2.line(visual_output, pt1, pt2, (255, 0, 0), 3)       # Blue length axis vector
-            cv2.circle(visual_output, pt1, 6, (0, 255, 0), -1)      # Endpoint node 1
-            cv2.circle(visual_output, pt2, 6, (0, 255, 0), -1)      # Endpoint node 2
+            cv2.line(visual_output, pt1, pt2, (255, 0, 0), 3)
+            cv2.circle(visual_output, pt1, 6, (0, 255, 0), -1)
+            cv2.circle(visual_output, pt2, 6, (0, 255, 0), -1)
             
-            # Distance computation
             pixel_distance = np.sqrt((pt1[0] - pt2[0])**2 + (pt1[1] - pt2[1])**2)
             automated_length_cm = pixel_distance / PIXELS_PER_CM
             
@@ -108,7 +126,6 @@ if img_file is not None:
             with col_img2:
                 st.image(clean_mask, caption="Low-Light Filter Mask (Used for Area)")
             
-            # Cleanly display only the two metrics requested
             c1, c2 = st.columns(2)
             c1.metric(label="Calculated Length", value=f"{automated_length_cm:.2f} cm")
             c2.metric(label="Surface Area", value=f"{measured_area_cm2:.2f} cm²")
@@ -131,9 +148,4 @@ if img_file is not None:
             st.download_button(
                 label="💾 Download Morphometrics Entry (CSV)",
                 data=csv,
-                file_name=f"broiler_metrics_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-                mime="text/csv",
-                type="primary"
-            )
-        else:
-            st.warning("Could not isolate a solid skeletal vector. Readjust the red crop box closer to the chicken's edge.")
+                file_name=f"broiler
