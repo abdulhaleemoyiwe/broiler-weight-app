@@ -9,20 +9,23 @@ from PIL import Image
 # --- CONFIGURATION ---
 PIXELS_PER_CM = 18.5 
 
-st.set_page_config(page_title="Broiler Morphometrics", layout="wide")
+# Keeping layout centered for a tight, standardized portrait view on mobile phones
+st.set_page_config(page_title="Broiler Morphometrics", layout="centered")
 
-# --- CUSTOM CSS: INSTANT RESPONSIVE LAYOUT ---
+# --- CORE DATA COLLECTION VISUAL OVERRIDE CSS ---
 st.markdown("""
     <style>
-    /* 1. Only hide the central overlay reticle grid, leaving utility icons intact */
+    /* 1. Remove the default central target reticle lines completely */
     [data-testid="stCameraInput"] video + div svg {
         display: none !important;
     }
     
-    /* 2. Strip out all dark shading bars and blur filters from the viewport layout */
+    /* 2. FORCE FULL TRANSPARENCY & ELIMINATE ALL GRAY BACKDROP MASKING BARS */
+    [data-testid="stCameraInput"], 
     [data-testid="stCameraInput"] > div,
     [data-testid="stCameraInput"] div div,
-    [data-testid="stCameraInput"] [style*="backdrop-filter"] {
+    [data-testid="stCameraInput"] [style*="backdrop-filter"],
+    [data-testid="stCameraInput"] [style*="background-color"] {
         background-color: transparent !important;
         background: transparent !important;
         backdrop-filter: none !important;
@@ -30,37 +33,27 @@ st.markdown("""
         box-shadow: none !important;
     }
 
-    /* 3. Base styling for our 1-Meter Guide Box */
+    /* 3. STRETCH VIEWPORT TO REMOVE INTERNAL SIDE LETTERBOXES */
+    [data-testid="stCameraInput"] video {
+        width: 100% !important;
+        height: auto !important;
+        object-fit: contain !important;
+        background-color: transparent !important;
+    }
+
+    /* 4. CRISP ELECTRONIC BLUE GUIDANCE BOX ON THE ABSOLUTE TOP LAYER */
     [data-testid="stCameraInput"] { position: relative; }
     [data-testid="stCameraInput"]::after {
         content: "ALIGN CHICKEN IN THIS BOX (1 METER)";
         position: absolute;
+        top: 15%; left: 10%; right: 10%; bottom: 20%;
+        border: 4px dashed #00BFFF;
         color: #00BFFF;
         font-weight: bold; font-size: 1.1rem;
         display: flex; align-items: flex-start; justify-content: center;
-        padding-top: 10px; text-align: center;
-        pointer-events: none; z-index: 99;
-        border: 4px dashed #00BFFF;
-    }
-
-    /* 4. DYNAMIC ORIENTATION RULES */
-    @media (orientation: portrait) {
-        [data-testid="stCameraInput"]::after {
-            top: 15%; left: 15%; right: 15%; bottom: 25%;
-        }
-    }
-    
-    @media (orientation: landscape) {
-        [data-testid="stCameraInput"] video {
-            width: 100% !important;
-            height: auto !important;
-            max-height: 70vh !important;
-            object-fit: cover !important;
-        }
-        [data-testid="stCameraInput"]::after {
-            top: 10%; left: 25%; right: 25%; bottom: 15%;
-            font-size: 1.3rem;
-        }
+        padding-top: 12px; text-align: center;
+        pointer-events: none; 
+        z-index: 99999 !important; /* Forces it over any un-killed container layer */
     }
     </style>
 """, unsafe_allow_html=True)
@@ -69,7 +62,7 @@ st.title("🐔 Automated Broiler Morphometrics")
 st.write("1-Meter Calibrated Contour Profiling Layout")
 
 # --- CAMERA INPUT ---
-st.info("Step 1: Rotate your device sideways for Landscape View, then align the broiler.")
+st.info("Step 1: Align the chicken inside the clear blue dashed box at exactly 1 meter distance.")
 img_file = st.camera_input("Capture Broiler Image")
 
 if img_file is not None:
@@ -85,7 +78,7 @@ if img_file is not None:
     
     st.write(f"Drag the red box tightly around the **{feature_type}**.")
 
-    # FIX: Set realtime_update=True so changes are calculated instantly without button hangouts
+    # High performance instant update loop
     cropped_feature = st_cropper(
         raw_pil_image, 
         realtime_update=True, 
@@ -97,10 +90,9 @@ if img_file is not None:
         feature_cv2 = np.array(cropped_feature)
         feature_cv2 = cv2.cvtColor(feature_cv2, cv2.COLOR_RGB2BGR)
         
-        # --- BACKGROUND PERFORMANCE BOOST ---
-        # Scale down large images temporarily to keep calculations lightning fast on mobile
+        # Performance matrix downsample optimization
         h_orig, w_orig = feature_cv2.shape[:2]
-        max_dimension = 300  # Lightweight pixel boundary
+        max_dimension = 300  
         scale_factor = 1.0
         
         if max(h_orig, w_orig) > max_dimension:
@@ -111,14 +103,14 @@ if img_file is not None:
             
         adjusted_pixels_per_cm = PIXELS_PER_CM * scale_factor
         
-        # --- INSTANT LOW-LIGHT NOISE FILTERING & MASK SEGMENTATION ---
+        # --- LOW-LIGHT NOISE FILTERING & MASK SEGMENTATION ---
         gray = cv2.cvtColor(processing_img, cv2.COLOR_BGR2GRAY)
         filtered = cv2.bilateralFilter(gray, 7, 50, 50)
         _, thresh = cv2.threshold(filtered, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
         kernel = np.ones((3,3), np.uint8)
         clean_mask = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
         
-        # --- PARAMETER 1: INSTANT SURFACE AREA ---
+        # --- PARAMETER 1: SURFACE AREA ---
         total_mask_pixels = np.sum(clean_mask == 255)
         measured_area_cm2 = total_mask_pixels / (adjusted_pixels_per_cm ** 2)
         
@@ -129,7 +121,6 @@ if img_file is not None:
             largest_contour = max(contours, key=cv2.contourArea)
             x_scaled, y_scaled, w_scaled, h_scaled = cv2.boundingRect(largest_contour)
             
-            # Map back up to original coordinates for crisp high-res display rendering
             x = int(x_scaled / scale_factor)
             y = int(y_scaled / scale_factor)
             w = int(w_scaled / scale_factor)
@@ -144,7 +135,6 @@ if img_file is not None:
             
             automated_length_cm = chosen_pixel_dimension / PIXELS_PER_CM
             
-            # Draw tracking output cleanly
             visual_output = feature_cv2.copy()
             cv2.rectangle(visual_output, (x, y), (x + w, y + h), (0, 255, 0), 2) 
             cv2.line(visual_output, pt1, pt2, (255, 0, 0), 3) 
@@ -158,7 +148,7 @@ if img_file is not None:
                 display_mask = cv2.resize(clean_mask, (w_orig, h_orig), interpolation=cv2.INTER_NEAREST)
                 st.image(display_mask, caption="Segmented Profile Mask (Used for Area)")
             
-            # Instant layout metrics
+            # Layout Metrics Display
             c1, c2 = st.columns(2)
             c1.metric(label="Calculated Profile Length", value=f"{automated_length_cm:.2f} cm")
             c2.metric(label="True Surface Area", value=f"{measured_area_cm2:.2f} cm²")
