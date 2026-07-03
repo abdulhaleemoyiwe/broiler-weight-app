@@ -5,16 +5,22 @@ import pandas as pd
 from datetime import datetime
 from streamlit_cropper import st_cropper
 from PIL import Image
+from skimage.morphology import skeletonize
 
 # --- CONFIGURATION ---
-# Calibration constant: Pixels per CM at exactly 1 meter distance
 PIXELS_PER_CM = 18.5 
 
 st.set_page_config(page_title="Broiler Morphometrics", layout="centered")
 
-# --- CUSTOM CSS: LIVE BLUE OVERLAY ON CAMERA ---
+# --- CUSTOM CSS: REMOVE GRAY OVERLAY & SHOW BLUE ALIGNMENT BOX ---
 st.markdown("""
     <style>
+    [data-testid="stCameraInput"] svg { 
+        display: none !important; 
+    }
+    [data-testid="stCameraInput"] > div {
+        background-color: transparent !important;
+    }
     [data-testid="stCameraInput"] { position: relative; }
     [data-testid="stCameraInput"]::after {
         content: "ALIGN CHICKEN IN THIS BOX (1 METER)";
@@ -30,11 +36,11 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🐔 Broiler Morphometrics")
-st.write("1-Meter Calibrated Data Collection")
+st.title("🐔 Automated Broiler Morphometrics")
+st.write("1-Meter Calibrated Length & Surface Area Segmentation")
 
-# --- CAMERA INPUT WITH LIVE BLUE BOX ---
-st.info("Step 1: Use the live blue box below to align the chicken at exactly 1 meter distance.")
+# --- CAMERA INPUT ---
+st.info("Step 1: Align the chicken inside the clear blue dashed box at exactly 1 meter distance.")
 img_file = st.camera_input("Capture Broiler Image")
 
 if img_file is not None:
@@ -42,13 +48,13 @@ if img_file is not None:
     st.divider()
     
     # --- POST-CAPTURE FEATURE SELECTION ---
-    st.subheader("Step 2: Isolate Measurement Target")
+    st.subheader("Step 2: Select Morphometric Target")
     feature_type = st.selectbox(
-        "Select the anatomical feature to measure:",
-        ["Chicken Body", "Shank (Leg)"]
+        "Select the feature to measure:",
+        ["Body Length", "Wingspan", "Shank Length"]
     )
     
-    st.write(f"Drag the red box to tightly enclose the **{feature_type}** to filter out background noise.")
+    st.write(f"Drag the red box to tightly enclose the **{feature_type}**.")
 
     # INTERACTIVE BOUNDING BOX
     cropped_feature = st_cropper(raw_pil_image, realtime_update=True, box_color='#FF0000', aspect_ratio=None)
@@ -57,66 +63,77 @@ if img_file is not None:
         feature_cv2 = np.array(cropped_feature)
         feature_cv2 = cv2.cvtColor(feature_cv2, cv2.COLOR_RGB2BGR)
         
-        # --- LOW-LIGHT NOISE FILTERING & EDGE DETECTION ---
+        # --- LOW-LIGHT NOISE FILTERING & MASK SEGMENTATION ---
         gray = cv2.cvtColor(feature_cv2, cv2.COLOR_BGR2GRAY)
         filtered = cv2.bilateralFilter(gray, 9, 75, 75)
         _, thresh = cv2.threshold(filtered, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
         kernel = np.ones((5,5), np.uint8)
         clean_mask = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
         
-        contours, _ = cv2.findContours(clean_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # --- PARAMETER 1: AUTOMATED SURFACE AREA CALCULATION ---
+        # Count all white pixels in the low-light mask
+        total_mask_pixels = np.sum(clean_mask == 255)
+        measured_area_cm2 = total_mask_pixels / (PIXELS_PER_CM ** 2)
         
-        if contours:
-            cnt = max(contours, key=cv2.contourArea)
-            x_f, y_f, w_f, h_f = cv2.boundingRect(cnt)
+        # --- PARAMETER 2: AUTOMATED SKELETON LENGTH CALCULATION ---
+        binary_input = clean_mask // 255  # Convert mask to 0s and 1s for skimage
+        skeleton = skeletonize(binary_input)
+        skeleton_output = (skeleton * 255).astype(np.uint8)
+        
+        # Extract pixel coordinates of the thinned line
+        y_indices, x_indices = np.where(skeleton_output > 0)
+        
+        if len(x_indices) > 2:
+            # Locate furthest endpoints on the skeleton path
+            coords = np.column_stack((x_indices, y_indices))
+            dist_matrix = np.sum((coords[:, None, :] - coords[None, :, :]) ** 2, axis=-1)
+            max_idx = np.unravel_index(np.argmax(dist_matrix), dist_matrix.shape)
+            pt1 = tuple(coords[max_idx[0]])
+            pt2 = tuple(coords[max_idx[1]])
             
-            # Draw the final green measurement box
-            cv2.rectangle(feature_cv2, (x_f, y_f), (x_f + w_f, y_f + h_f), (0, 255, 0), 3)
+            # Map tracking trajectory line visually onto the original cropped image
+            visual_output = feature_cv2.copy()
+            cv2.line(visual_output, pt1, pt2, (255, 0, 0), 3)       # Blue length axis vector
+            cv2.circle(visual_output, pt1, 6, (0, 255, 0), -1)      # Endpoint node 1
+            cv2.circle(visual_output, pt2, 6, (0, 255, 0), -1)      # Endpoint node 2
             
-            # --- AUTOMATIC CALCULATIONS IN CM ---
-            measured_length_cm = w_f / PIXELS_PER_CM
-            measured_width_cm = h_f / PIXELS_PER_CM
-            measured_area_cm2 = cv2.contourArea(cnt) / (PIXELS_PER_CM**2)
+            # Distance computation
+            pixel_distance = np.sqrt((pt1[0] - pt2[0])**2 + (pt1[1] - pt2[1])**2)
+            automated_length_cm = pixel_distance / PIXELS_PER_CM
             
-            st.write("### Processing Results")
+            st.write("### Processing & Segmentation Results")
             col_img1, col_img2 = st.columns(2)
             with col_img1:
-                st.image(feature_cv2, channels="BGR", caption=f"Measured {feature_type}")
+                st.image(visual_output, channels="BGR", caption=f"Measured {feature_type} Axis")
             with col_img2:
-                st.image(clean_mask, caption="Low-Light Filter Mask")
+                st.image(clean_mask, caption="Low-Light Filter Mask (Used for Area)")
             
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Length", f"{measured_length_cm:.2f} cm")
-            c2.metric("Width", f"{measured_width_cm:.2f} cm")
-            c3.metric("Surface Area", f"{measured_area_cm2:.2f} cm²")
+            # Cleanly display only the two metrics requested
+            c1, c2 = st.columns(2)
+            c1.metric(label="Calculated Length", value=f"{automated_length_cm:.2f} cm")
+            c2.metric(label="Surface Area", value=f"{measured_area_cm2:.2f} cm²")
             
-            # --- ELECTRONIC SCALE INPUT & DATA EXPORT ---
+            # --- DATA LOGGER AND EXPORT ---
             st.divider()
             st.subheader("Step 3: Log Data")
             actual_weight = st.number_input("Actual Scale Weight (grams) for Database", min_value=0.0, step=0.1)
             
-            # Create the spreadsheet row
             data_to_save = pd.DataFrame([{
                 "Date/Time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "Feature Measured": feature_type,
-                "Length (cm)": round(measured_length_cm, 2),
-                "Width (cm)": round(measured_width_cm, 2),
-                "Area (cm2)": round(measured_area_cm2, 2),
+                "Length (cm)": round(automated_length_cm, 2),
+                "Surface Area (cm2)": round(measured_area_cm2, 2),
                 "Actual Weight (g)": actual_weight
             }])
             
-            # Generate CSV file for download
             csv = data_to_save.to_csv(index=False).encode('utf-8')
             
             st.download_button(
-                label="💾 Download Measurement Data (CSV)",
+                label="💾 Download Morphometrics Entry (CSV)",
                 data=csv,
-                file_name=f"broiler_data_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                file_name=f"broiler_metrics_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
                 mime="text/csv",
                 type="primary"
             )
-            
-            st.caption("Clicking the button above will save this measurement directly to your phone as a spreadsheet file.")
-                
         else:
-            st.warning("Could not detect the object. Please adjust the red crop box.")
+            st.warning("Could not isolate a solid skeletal vector. Readjust the red crop box closer to the chicken's edge.")
