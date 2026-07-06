@@ -6,21 +6,20 @@ from datetime import datetime
 from streamlit_cropper import st_cropper
 from PIL import Image
 
-# --- CONFIGURATION ---
+# --- CONFIGURATION & CALIBRATION ---
 PIXELS_PER_CM = 18.5 
 
-# Keeping layout centered for a tight, standardized portrait view on mobile phones
 st.set_page_config(page_title="Broiler Morphometrics", layout="centered")
 
-# --- CORE DATA COLLECTION VISUAL OVERRIDE CSS ---
+# --- CUSTOM CSS: CLEAN CAMERA VIEWPORT & 1-METER GUIDANCE BOX ---
 st.markdown("""
     <style>
-    /* 1. Remove the default central target reticle lines completely */
+    /* 1. Hide default Streamlit camera target reticle lines */
     [data-testid="stCameraInput"] video + div svg {
         display: none !important;
     }
     
-    /* 2. FORCE FULL TRANSPARENCY & ELIMINATE ALL GRAY BACKDROP MASKING BARS */
+    /* 2. Strip out all dark masking bars, shading, and blur filters */
     [data-testid="stCameraInput"], 
     [data-testid="stCameraInput"] > div,
     [data-testid="stCameraInput"] div div,
@@ -33,7 +32,7 @@ st.markdown("""
         box-shadow: none !important;
     }
 
-    /* 3. STRETCH VIEWPORT TO REMOVE INTERNAL SIDE LETTERBOXES */
+    /* 3. Ensure crisp video presentation without side letterboxing */
     [data-testid="stCameraInput"] video {
         width: 100% !important;
         height: auto !important;
@@ -41,7 +40,7 @@ st.markdown("""
         background-color: transparent !important;
     }
 
-    /* 4. CRISP ELECTRONIC BLUE GUIDANCE BOX ON THE ABSOLUTE TOP LAYER */
+    /* 4. Overlay bright blue 1-Meter Calibration Guide Box on top layer */
     [data-testid="stCameraInput"] { position: relative; }
     [data-testid="stCameraInput"]::after {
         content: "ALIGN CHICKEN IN THIS BOX (1 METER)";
@@ -53,15 +52,15 @@ st.markdown("""
         display: flex; align-items: flex-start; justify-content: center;
         padding-top: 12px; text-align: center;
         pointer-events: none; 
-        z-index: 99999 !important; /* Forces it over any un-killed container layer */
+        z-index: 99999 !important;
     }
     </style>
 """, unsafe_allow_html=True)
 
 st.title("🐔 Automated Broiler Morphometrics")
-st.write("1-Meter Calibrated Contour Profiling Layout")
+st.write("1-Meter Calibrated Rotated Contour & Convex Hull Profiling")
 
-# --- CAMERA INPUT ---
+# --- STEP 1: CAMERA INPUT ---
 st.info("Step 1: Align the chicken inside the clear blue dashed box at exactly 1 meter distance.")
 img_file = st.camera_input("Capture Broiler Image")
 
@@ -69,7 +68,7 @@ if img_file is not None:
     raw_pil_image = Image.open(img_file)
     st.divider()
     
-    # --- POST-CAPTURE FEATURE SELECTION ---
+    # --- STEP 2: FEATURE SELECTION & INTERACTIVE CROP ---
     st.subheader("Step 2: Select Morphometric Target")
     feature_type = st.selectbox(
         "Select the feature to measure:",
@@ -78,7 +77,7 @@ if img_file is not None:
     
     st.write(f"Drag the red box tightly around the **{feature_type}**.")
 
-    # High performance instant update loop
+    # High-speed responsive crop loop (realtime_update=True eliminates button hang)
     cropped_feature = st_cropper(
         raw_pil_image, 
         realtime_update=True, 
@@ -87,12 +86,14 @@ if img_file is not None:
     )
     
     if cropped_feature:
+        # Convert PIL format to OpenCV BGR format safely
         feature_cv2 = np.array(cropped_feature)
         feature_cv2 = cv2.cvtColor(feature_cv2, cv2.COLOR_RGB2BGR)
         
-        # Performance matrix downsample optimization
+        # --- PERFORMANCE MATRIX DOWNSAMPLING ---
+        # Keeps mobile processing lightning fast while preserving visual quality
         h_orig, w_orig = feature_cv2.shape[:2]
-        max_dimension = 300  
+        max_dimension = 350  
         scale_factor = 1.0
         
         if max(h_orig, w_orig) > max_dimension:
@@ -103,57 +104,74 @@ if img_file is not None:
             
         adjusted_pixels_per_cm = PIXELS_PER_CM * scale_factor
         
-        # --- LOW-LIGHT NOISE FILTERING & MASK SEGMENTATION ---
+        # --- LOW-LIGHT NOISE FILTERING & OTSU SEGMENTATION ---
         gray = cv2.cvtColor(processing_img, cv2.COLOR_BGR2GRAY)
-        filtered = cv2.bilateralFilter(gray, 7, 50, 50)
+        filtered = cv2.bilateralFilter(gray, 9, 75, 75)
         _, thresh = cv2.threshold(filtered, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-        kernel = np.ones((3,3), np.uint8)
+        
+        # Morphological close seals internal feather gaps
+        kernel = np.ones((5,5), np.uint8)
         clean_mask = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
         
-        # --- PARAMETER 1: SURFACE AREA ---
-        total_mask_pixels = np.sum(clean_mask == 255)
-        measured_area_cm2 = total_mask_pixels / (adjusted_pixels_per_cm ** 2)
-        
-        # --- PARAMETER 2: CONTOUR BOUNDING BOX ---
+        # --- BIOLOGICAL ROTATED AXIS & CONVEX HULL EXTRACTION ---
         contours, _ = cv2.findContours(clean_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
         if contours:
             largest_contour = max(contours, key=cv2.contourArea)
-            x_scaled, y_scaled, w_scaled, h_scaled = cv2.boundingRect(largest_contour)
             
-            x = int(x_scaled / scale_factor)
-            y = int(y_scaled / scale_factor)
-            w = int(w_scaled / scale_factor)
-            h = int(h_scaled / scale_factor)
+            # Convex Hull wraps a clean biological boundary over jagged floor litter noise
+            hull_scaled = cv2.convexHull(largest_contour)
             
-            if feature_type == "Shank Length":
-                chosen_pixel_dimension = h
-                pt1, pt2 = (int(x + w//2), int(y)), (int(x + w//2), int(y + h))
+            # Rotated Minimum Area Box tilts dynamically to align with posture axis
+            rect_scaled = cv2.minAreaRect(hull_scaled)
+            box_pts_scaled = cv2.boxPoints(rect_scaled)
+            
+            # Mathematical calculations performed strictly in calibrated scale space
+            rect_width, rect_height = rect_scaled[1]
+            chosen_pixel_dimension = max(rect_width, rect_height)
+            
+            automated_length_cm = chosen_pixel_dimension / adjusted_pixels_per_cm
+            measured_area_cm2 = cv2.contourArea(hull_scaled) / (adjusted_pixels_per_cm ** 2)
+            
+            # Calculate central vector midpoints along the longest rotated axis
+            dist01 = np.linalg.norm(box_pts_scaled[0] - box_pts_scaled[1])
+            dist12 = np.linalg.norm(box_pts_scaled[1] - box_pts_scaled[2])
+            
+            if dist01 > dist12:
+                mid1 = (box_pts_scaled[0] + box_pts_scaled[3]) / 2.0
+                mid2 = (box_pts_scaled[1] + box_pts_scaled[2]) / 2.0
             else:
-                chosen_pixel_dimension = w
-                pt1, pt2 = (int(x), int(y + h//2)), (int(x + w), int(y + h//2))
+                mid1 = (box_pts_scaled[0] + box_pts_scaled[1]) / 2.0
+                mid2 = (box_pts_scaled[2] + box_pts_scaled[3]) / 2.0
+                
+            # Scale coordinates up to original resolution for crisp visual rendering
+            hull_display = (hull_scaled / scale_factor).astype(np.int32)
+            box_display = (box_pts_scaled / scale_factor).astype(np.int32)
+            pt1 = (int(mid1[0] / scale_factor), int(mid1[1] / scale_factor))
+            pt2 = (int(mid2[0] / scale_factor), int(mid2[1] / scale_factor))
             
-            automated_length_cm = chosen_pixel_dimension / PIXELS_PER_CM
-            
+            # Draw overlay tracking onto original high-resolution output
             visual_output = feature_cv2.copy()
-            cv2.rectangle(visual_output, (x, y), (x + w, y + h), (0, 255, 0), 2) 
-            cv2.line(visual_output, pt1, pt2, (255, 0, 0), 3) 
+            cv2.drawContours(visual_output, [box_display], 0, (0, 255, 0), 2)  # Green Rotated Box
+            cv2.drawContours(visual_output, [hull_display], 0, (0, 255, 255), 1) # Yellow Edge Contour
+            cv2.line(visual_output, pt1, pt2, (255, 0, 0), 3)                 # Blue Structural Axis Line
             
+            # Prepare crisp display grid
             st.write("### Processing & Segmentation Results")
             col_img1, col_img2 = st.columns(2)
             with col_img1:
                 display_img = cv2.cvtColor(visual_output, cv2.COLOR_BGR2RGB)
-                st.image(display_img, caption=f"Measured {feature_type} Window")
+                st.image(display_img, caption=f"Rotated Biological Axis ({feature_type})")
             with col_img2:
                 display_mask = cv2.resize(clean_mask, (w_orig, h_orig), interpolation=cv2.INTER_NEAREST)
-                st.image(display_mask, caption="Segmented Profile Mask (Used for Area)")
+                st.image(display_mask, caption="Convex Hull Filter Mask (Used for Area)")
             
-            # Layout Metrics Display
+            # Clean Metrics Readout
             c1, c2 = st.columns(2)
-            c1.metric(label="Calculated Profile Length", value=f"{automated_length_cm:.2f} cm")
-            c2.metric(label="True Surface Area", value=f"{measured_area_cm2:.2f} cm²")
+            c1.metric(label="True Rotated Axis Length", value=f"{automated_length_cm:.2f} cm")
+            c2.metric(label="Convex Hull Surface Area", value=f"{measured_area_cm2:.2f} cm²")
             
-            # --- DATA LOGGER AND EXPORT ---
+            # --- STEP 3: DATABASE DATA LOGGER ---
             st.divider()
             st.subheader("Step 3: Log Data")
             actual_weight = st.number_input("Actual Scale Weight (grams) for Database", min_value=0.0, step=0.1)
@@ -176,4 +194,4 @@ if img_file is not None:
                 type="primary"
             )
         else:
-            st.warning("No clear broiler profile detected inside the selection region. Readjust the red crop box.")
+            st.warning("No clear broiler silhouette detected inside the selection region. Readjust the red crop box.")
