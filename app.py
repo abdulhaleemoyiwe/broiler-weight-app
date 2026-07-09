@@ -5,6 +5,7 @@ import pandas as pd
 from datetime import datetime
 from streamlit_cropper import st_cropper
 from PIL import Image
+import io
 
 # --- CONFIGURATION & CALIBRATION ---
 PIXELS_PER_CM = 18.5 
@@ -77,7 +78,6 @@ if img_file is not None:
     
     st.write(f"Drag the red box tightly around the **{feature_type}**.")
 
-    # High-speed responsive crop loop (realtime_update=True eliminates button hang)
     cropped_feature = st_cropper(
         raw_pil_image, 
         realtime_update=True, 
@@ -86,12 +86,10 @@ if img_file is not None:
     )
     
     if cropped_feature:
-        # Convert PIL format to OpenCV BGR format safely
         feature_cv2 = np.array(cropped_feature)
         feature_cv2 = cv2.cvtColor(feature_cv2, cv2.COLOR_RGB2BGR)
         
         # --- PERFORMANCE MATRIX DOWNSAMPLING ---
-        # Keeps mobile processing lightning fast while preserving visual quality
         h_orig, w_orig = feature_cv2.shape[:2]
         max_dimension = 350  
         scale_factor = 1.0
@@ -109,7 +107,6 @@ if img_file is not None:
         filtered = cv2.bilateralFilter(gray, 9, 75, 75)
         _, thresh = cv2.threshold(filtered, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
         
-        # Morphological close seals internal feather gaps
         kernel = np.ones((5,5), np.uint8)
         clean_mask = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
         
@@ -119,21 +116,16 @@ if img_file is not None:
         if contours:
             largest_contour = max(contours, key=cv2.contourArea)
             
-            # Convex Hull wraps a clean biological boundary over jagged floor litter noise
             hull_scaled = cv2.convexHull(largest_contour)
-            
-            # Rotated Minimum Area Box tilts dynamically to align with posture axis
             rect_scaled = cv2.minAreaRect(hull_scaled)
             box_pts_scaled = cv2.boxPoints(rect_scaled)
             
-            # Mathematical calculations performed strictly in calibrated scale space
             rect_width, rect_height = rect_scaled[1]
             chosen_pixel_dimension = max(rect_width, rect_height)
             
             automated_length_cm = chosen_pixel_dimension / adjusted_pixels_per_cm
             measured_area_cm2 = cv2.contourArea(hull_scaled) / (adjusted_pixels_per_cm ** 2)
             
-            # Calculate central vector midpoints along the longest rotated axis
             dist01 = np.linalg.norm(box_pts_scaled[0] - box_pts_scaled[1])
             dist12 = np.linalg.norm(box_pts_scaled[1] - box_pts_scaled[2])
             
@@ -144,19 +136,16 @@ if img_file is not None:
                 mid1 = (box_pts_scaled[0] + box_pts_scaled[1]) / 2.0
                 mid2 = (box_pts_scaled[2] + box_pts_scaled[3]) / 2.0
                 
-            # Scale coordinates up to original resolution for crisp visual rendering
             hull_display = (hull_scaled / scale_factor).astype(np.int32)
             box_display = (box_pts_scaled / scale_factor).astype(np.int32)
             pt1 = (int(mid1[0] / scale_factor), int(mid1[1] / scale_factor))
             pt2 = (int(mid2[0] / scale_factor), int(mid2[1] / scale_factor))
             
-            # Draw overlay tracking onto original high-resolution output
             visual_output = feature_cv2.copy()
-            cv2.drawContours(visual_output, [box_display], 0, (0, 255, 0), 2)  # Green Rotated Box
-            cv2.drawContours(visual_output, [hull_display], 0, (0, 255, 255), 1) # Yellow Edge Contour
-            cv2.line(visual_output, pt1, pt2, (255, 0, 0), 3)                 # Blue Structural Axis Line
+            cv2.drawContours(visual_output, [box_display], 0, (0, 255, 0), 2)  
+            cv2.drawContours(visual_output, [hull_display], 0, (0, 255, 255), 1) 
+            cv2.line(visual_output, pt1, pt2, (255, 0, 0), 3)                 
             
-            # Prepare crisp display grid
             st.write("### Processing & Segmentation Results")
             col_img1, col_img2 = st.columns(2)
             with col_img1:
@@ -166,7 +155,6 @@ if img_file is not None:
                 display_mask = cv2.resize(clean_mask, (w_orig, h_orig), interpolation=cv2.INTER_NEAREST)
                 st.image(display_mask, caption="Convex Hull Filter Mask (Used for Area)")
             
-            # Clean Metrics Readout
             c1, c2 = st.columns(2)
             c1.metric(label="True Rotated Axis Length", value=f"{automated_length_cm:.2f} cm")
             c2.metric(label="Convex Hull Surface Area", value=f"{measured_area_cm2:.2f} cm²")
@@ -175,6 +163,9 @@ if img_file is not None:
             st.divider()
             st.subheader("Step 3: Log Data")
             actual_weight = st.number_input("Actual Scale Weight (grams) for Database", min_value=0.0, step=0.1)
+            
+            # Formulate perfectly paired layout names
+            current_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             
             data_to_save = pd.DataFrame([{
                 "Date/Time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -186,34 +177,28 @@ if img_file is not None:
             
             csv = data_to_save.to_csv(index=False).encode('utf-8')
             
-            st.download_button(
-                label="💾 Download Morphometrics Entry (CSV)",
-                data=csv,
-                file_name=f"broiler_metrics_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-                mime="text/csv",
-                type="primary"
-
-                            # --- NEW: RAW IMAGE DOWNLOAD FOR YOLO TRAINING ---
-            import io
-
-            # 1. Convert the clean, raw captured photo into an in-memory byte buffer
-            raw_image_buffer = io.BytesIO()
-            raw_pil_image.save(
-                raw_image_buffer, format="JPEG"
-            )  # Saves the clean image without OpenCV lines
-            raw_image_bytes = raw_image_buffer.getvalue()
-
-            # 2. Generate a matching timestamp so image and CSV names pair up perfectly
-            current_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-            # 3. Display the Image Download Button right on your screen
-            st.download_button(
-                label="📸 Download Clean Training Image (YOLO)",
-                data=raw_image_bytes,
-                file_name=f"broiler_raw_{current_timestamp}.jpg",
-                mime="image/jpeg",
-                use_container_width=True,
-            )
-            )
+            # Layout the data download elements nicely side-by-side
+            col_btn1, col_btn2 = st.columns(2)
+            with col_btn1:
+                st.download_button(
+                    label="💾 Download CSV Entry",
+                    data=csv,
+                    file_name=f"broiler_metrics_{current_timestamp}.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                    type="primary"
+                )
+            with col_btn2:
+                raw_image_buffer = io.BytesIO()
+                raw_pil_image.save(raw_image_buffer, format="JPEG")
+                raw_image_bytes = raw_image_buffer.getvalue()
+                
+                st.download_button(
+                    label="📸 Download Clean Image",
+                    data=raw_image_bytes,
+                    file_name=f"broiler_raw_{current_timestamp}.jpg",
+                    mime="image/jpeg",
+                    use_container_width=True
+                )
         else:
             st.warning("No clear broiler silhouette detected inside the selection region. Readjust the red crop box.")
