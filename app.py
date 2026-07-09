@@ -192,6 +192,28 @@ if img_file is not None:
                 file_name=f"broiler_metrics_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
                 mime="text/csv",
                 type="primary"
+
+                            # --- NEW: RAW IMAGE DOWNLOAD FOR YOLO TRAINING ---
+            import io
+
+            # 1. Convert the clean, raw captured photo into an in-memory byte buffer
+            raw_image_buffer = io.BytesIO()
+            raw_pil_image.save(
+                raw_image_buffer, format="JPEG"
+            )  # Saves the clean image without OpenCV lines
+            raw_image_bytes = raw_image_buffer.getvalue()
+
+            # 2. Generate a matching timestamp so image and CSV names pair up perfectly
+            current_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+            # 3. Display the Image Download Button right on your screen
+            st.download_button(
+                label="📸 Download Clean Training Image (YOLO)",
+                data=raw_image_bytes,
+                file_name=f"broiler_raw_{current_timestamp}.jpg",
+                mime="image/jpeg",
+                use_container_width=True,
+            )
             )
         else:
             st.warning("No clear broiler silhouette detected inside the selection region. Readjust the red crop box.")
