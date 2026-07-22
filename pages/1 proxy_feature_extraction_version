@@ -1,0 +1,183 @@
+import streamlit as st
+import cv2
+import numpy as np
+import pandas as pd
+from datetime import datetime
+from streamlit_cropper import st_cropper
+from PIL import Image
+import io
+
+st.set_page_config(page_title="Fixed Distance Morphological Extractor", layout="centered")
+
+# --- CUSTOM CSS: CLEAN CAMERA VIEWPORT ---
+st.markdown("""
+    <style>
+    [data-testid="stCameraInput"] video + div svg { display: none !important; }
+    [data-testid="stCameraInput"], [data-testid="stCameraInput"] > div,
+    [data-testid="stCameraInput"] div div {
+        background-color: transparent !important;
+        background: transparent !important;
+        box-shadow: none !important;
+    }
+    [data-testid="stCameraInput"] video {
+        width: 100% !important;
+        height: auto !important;
+        object-fit: contain !important;
+    }
+    [data-testid="stCameraInput"] { position: relative; }
+    [data-testid="stCameraInput"]::after {
+        content: "POSITION CAMERA AT 1-METER FIXED HEIGHT";
+        position: absolute;
+        top: 15%; left: 10%; right: 10%; bottom: 20%;
+        border: 4px dashed #4BB543;
+        color: #4BB543;
+        font-weight: bold; font-size: 1.1rem;
+        display: flex; align-items: flex-start; justify-content: center;
+        padding-top: 12px; text-align: center;
+        pointer-events: none; 
+        z-index: 99999 !important;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+st.title("📏 Fixed-Distance Morphological Extractor")
+st.write("Extracts Major Axis, Minor Axis, and Projected Surface Area assuming a standardized 1-meter camera height.")
+
+# --- SIDEBAR CONFIGURATION ---
+st.sidebar.header("Calibration Settings")
+# Pre-calibrated pixel-to-cm ratio at exactly 1 meter distance (adjust based on your camera hardware setup)
+default_pixels_per_cm = st.sidebar.number_input("Pixels per cm at 1 Meter", value=15.0, step=0.1, help="Baseline calibration scale factor when phone is held 1 meter above the floor.")
+
+# --- STEP 1: CAMERA INPUT ---
+st.info("Step 1: Keep your phone at a consistent 1-meter height and capture the broiler.")
+img_file = st.camera_input("Capture Frame (1m Height)")
+
+if img_file is not None:
+    raw_pil_image = Image.open(img_file)
+    st.divider()
+    
+    # --- STEP 2: INTERACTIVE CROP ---
+    st.subheader("Step 2: Box the Target Broiler")
+    st.write("Drag the red crop box tightly around the broiler to isolate it from the floor background.")
+
+    cropped_feature = st_cropper(
+        raw_pil_image, 
+        realtime_update=True, 
+        box_color='#FF0000', 
+        aspect_ratio=None
+    )
+    
+    if cropped_feature:
+        feature_cv2 = np.array(cropped_feature)
+        feature_cv2 = cv2.cvtColor(feature_cv2, cv2.COLOR_RGB2BGR)
+        
+        # --- ROBUST ADAPTIVE IMAGE PROCESSING PIPELINE ---
+        h_orig, w_orig = feature_cv2.shape[:2]
+        gray = cv2.cvtColor(feature_cv2, cv2.COLOR_BGR2GRAY)
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        
+        # Adaptive Thresholding to isolate bird from floor texture
+        thresh = cv2.adaptiveThreshold(
+            blurred, 255, 
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+            cv2.THRESH_BINARY_INV, 11, 2
+        )
+        
+        # Morphological Closing to fill internal gaps (like feathers/shadows)
+        kernel = np.ones((3,3), np.uint8)
+        clean_mask = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel, iterations=2)
+        
+        # --- FIND CONTOURS ---
+        contours, _ = cv2.findContours(clean_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        valid_object_contour = None
+        max_obj_area = 0
+        
+        for cnt in contours:
+            area = cv2.contourArea(cnt)
+            if area > max_obj_area and area > 300: # Minimum size filter to ignore background noise
+                max_obj_area = area
+                valid_object_contour = cnt
+                
+        visual_output = feature_cv2.copy()
+        
+        if valid_object_contour is not None:
+            hull = cv2.convexHull(valid_object_contour)
+            
+            # Minimum Area Bounding Box for Major & Minor axes
+            rect = cv2.minAreaRect(hull)
+            box_pts = cv2.boxPoints(rect)
+            box_pts = np.int32(box_pts)
+            
+            rect_width, rect_height = rect[1]
+            
+            # Apply Fixed-Distance Calibration Scale
+            major_axis_cm = max(rect_width, rect_height) / default_pixels_per_cm
+            minor_axis_cm = min(rect_width, rect_height) / default_pixels_per_cm
+            surface_area_cm2 = cv2.contourArea(hull) / (default_pixels_per_cm ** 2)
+            
+            # Draw visual bounding box and hull
+            cv2.drawContours(visual_output, [box_pts], 0, (0, 255, 0), 2)  
+            cv2.drawContours(visual_output, [hull], 0, (0, 255, 255), 1) 
+            
+            st.success("✅ Broiler Silhouette Isolated Successfully (Fixed-Distance Mode)")
+            
+            st.write("### 📊 Extracted Morphological Features")
+            col_img1, col_img2 = st.columns(2)
+            with col_img1:
+                display_img = cv2.cvtColor(visual_output, cv2.COLOR_BGR2RGB)
+                st.image(display_img, caption="Analyzed Contour View")
+            with col_img2:
+                display_mask = cv2.resize(clean_mask, (w_orig, h_orig))
+                st.image(display_mask, caption="Adaptive Clean Mask")
+            
+            # Display metrics in 3 columns
+            m1, m2, m3 = st.columns(3)
+            m1.metric(label="Major Axis Length", value=f"{major_axis_cm:.2f} cm")
+            m2.metric(label="Minor Axis Length", value=f"{minor_axis_cm:.2f} cm")
+            m3.metric(label="Projected Surface Area", value=f"{surface_area_cm2:.2f} cm²")
+            
+            # --- STEP 3: DATA LOGGER ---
+            st.divider()
+            st.subheader("Step 3: Log Training Data")
+            actual_weight = st.number_input("Actual Physical Weight (grams):", min_value=0.0, step=10.0)
+            actual_length = st.number_input("Actual Physical Length (cm - optional):", min_value=0.0, step=0.1)
+            
+            current_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            
+            data_to_save = pd.DataFrame([{
+                "Date/Time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "Major Axis Length (cm)": round(major_axis_cm, 2),
+                "Minor Axis Length (cm)": round(minor_axis_cm, 2),
+                "Projected Surface Area (cm2)": round(surface_area_cm2, 2),
+                "Actual Length (cm)": actual_length,
+                "Actual Weight (g)": actual_weight,
+                "Calibration Method": "Fixed 1-Meter Distance"
+            }])
+            
+            csv = data_to_save.to_csv(index=False).encode('utf-8')
+            
+            col_btn1, col_btn2 = st.columns(2)
+            with col_btn1:
+                st.download_button(
+                    label="💾 Download Training CSV",
+                    data=csv,
+                    file_name=f"fixed_distance_features_{current_timestamp}.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                    type="primary"
+                )
+            with col_btn2:
+                raw_image_buffer = io.BytesIO()
+                raw_pil_image.save(raw_image_buffer, format="JPEG")
+                raw_image_bytes = raw_image_buffer.getvalue()
+                
+                st.download_button(
+                    label="📸 Download Source Image",
+                    data=raw_image_bytes,
+                    file_name=f"fixed_distance_image_{current_timestamp}.jpg",
+                    mime="image/jpeg",
+                    use_container_width=True
+                )
+        else:
+            st.warning("⚠️ No broiler silhouette detected inside the crop box. Expand your red crop box slightly to fully enclose the bird.")
