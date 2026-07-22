@@ -112,13 +112,20 @@ if img_file is not None:
             cv2.drawContours(visual_output, [marker_contour], -1, (255, 0, 0), 3) # Blue boundary for marker
             scale_status = "Dynamic (Marker Calibrated)"
             
-            # --- FLEXIBLE OBJECT MEASUREMENT LOGIC ---
+            # --- FIXED OBJECT MEASUREMENT LOGIC ---
             valid_object_contour = None
             max_obj_area = 0
             
+            # Get bounding box of the detected marker to exclude it cleanly
+            mx, my, mw, mh = cv2.boundingRect(marker_contour)
+            
             for cnt in contours:
-                if np.array_equal(cnt, marker_contour):
+                cx, cy, cw, ch = cv2.boundingRect(cnt)
+                
+                # Check if this contour IS the marker by seeing if their bounding boxes overlap heavily
+                if abs(cx - mx) < 15 and abs(cy - my) < 15 and abs(cw - mw) < 15:
                     continue
+                
                 area = cv2.contourArea(cnt)
                 if area > max_obj_area and area > 200:
                     max_obj_area = area
@@ -193,6 +200,6 @@ if img_file is not None:
                         use_container_width=True
                     )
             else:
-                st.warning("⚠️ 10x10 Marker found, but no target object was detected inside the crop box. Expand your red crop box to include your test object.")
+                st.warning("⚠️ 10x10 Marker found, but no target object was detected inside the crop box. Expand your red crop box slightly to fully enclose your test object.")
         else:
             st.error("❌ 10x10 Marker not found. Ensure the white square paper is flat, well-lit, and fully enclosed within your red crop box.")
