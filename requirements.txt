@@ -1,7 +1,6 @@
 streamlit
+ultralytics
 opencv-python-headless
 numpy
 pandas
-streamlit-cropper
 Pillow
-scikit-image
