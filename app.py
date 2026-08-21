@@ -54,7 +54,7 @@ if img_file_buffer is not None:
 
     # 2. Run YOLO Instance Segmentation
         # New line: Only detect if 60% confident or higher
-    results = model(frame, conf=0.6)
+    results = model(frame, conf=0.7)
     
     if results[0].masks is not None:
         # Extract Mask and Geometric Contours
