@@ -5,6 +5,25 @@ import pandas as pd
 import os
 from ultralytics import YOLO
 
+# Custom CSS to remove gray letterboxing borders from camera input
+st.markdown(
+    """
+    <style>
+    /* Make camera container full width and remove background padding */
+    [data-testid="stCameraInput"] > div {
+        background-color: transparent !important;
+        width: 100% !important;
+    }
+    /* Stretch video feed to eliminate side pillarboxes */
+    [data-testid="stCameraInput"] video {
+        object-fit: cover !important;
+        width: 100% !important;
+        border-radius: 8px;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 # --- System Constants ---
 CSV_FILE = "regression_data.csv"
 MARKER_REAL_SIZE_CM = 5.0  # Size of your printed ArUco marker square
