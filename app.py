@@ -2,203 +2,129 @@ import streamlit as st
 import cv2
 import numpy as np
 import pandas as pd
-from datetime import datetime
-from streamlit_cropper import st_cropper
-from PIL import Image
-import io
+import os
+from ultralytics import YOLO
 
-# --- CONFIGURATION & CALIBRATION ---
-PIXELS_PER_CM = 18.5 
+# --- System Constants ---
+CSV_FILE = "regression_data.csv"
+MARKER_REAL_SIZE_CM = 5.0  # Size of your printed ArUco marker square
+Z_REF = 100.0  # Baseline calibration height in cm (1 meter)
 
-st.set_page_config(page_title="Broiler Morphometrics", layout="centered")
+# IMPORTANT: You will need to tweak this value once during your setup!
+# It represents how many cm 1 pixel equals when the camera is exactly 100cm away.
+BASE_CM_PER_PIXEL_AT_1M = 0.045 
 
-# --- CUSTOM CSS: CLEAN CAMERA VIEWPORT & 1-METER GUIDANCE BOX ---
-st.markdown("""
-    <style>
-    /* 1. Hide default Streamlit camera target reticle lines */
-    [data-testid="stCameraInput"] video + div svg {
-        display: none !important;
-    }
+@st.cache_resource
+def load_model():
+    return YOLO("best.pt")
+
+model = load_model()
+
+st.title("Chicken Feature Extraction (ArUco & Fallback)")
+
+# User Controls
+actual_weight = st.number_input("Enter Actual Scale Weight (g):", min_value=0.0, step=1.0)
+z_actual = st.number_input("Camera Distance to Platform (cm):", min_value=10.0, max_value=300.0, value=100.0)
+
+img_file_buffer = st.camera_input("Take Snapshot")
+
+if img_file_buffer is not None:
+    # 1. Load image from camera
+    bytes_data = img_file_buffer.getvalue()
+    frame = cv2.imdecode(np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR)
+
+    # 2. Run YOLO Instance Segmentation
+    results = model(frame)
     
-    /* 2. Strip out all dark masking bars, shading, and blur filters */
-    [data-testid="stCameraInput"], 
-    [data-testid="stCameraInput"] > div,
-    [data-testid="stCameraInput"] div div,
-    [data-testid="stCameraInput"] [style*="backdrop-filter"],
-    [data-testid="stCameraInput"] [style*="background-color"] {
-        background-color: transparent !important;
-        background: transparent !important;
-        backdrop-filter: none !important;
-        -webkit-backdrop-filter: none !important;
-        box-shadow: none !important;
-    }
-
-    /* 3. Ensure crisp video presentation without side letterboxing */
-    [data-testid="stCameraInput"] video {
-        width: 100% !important;
-        height: auto !important;
-        object-fit: contain !important;
-        background-color: transparent !important;
-    }
-
-    /* 4. Overlay bright blue 1-Meter Calibration Guide Box on top layer */
-    [data-testid="stCameraInput"] { position: relative; }
-    [data-testid="stCameraInput"]::after {
-        content: "ALIGN CHICKEN IN THIS BOX (1 METER)";
-        position: absolute;
-        top: 15%; left: 10%; right: 10%; bottom: 20%;
-        border: 4px dashed #00BFFF;
-        color: #00BFFF;
-        font-weight: bold; font-size: 1.1rem;
-        display: flex; align-items: flex-start; justify-content: center;
-        padding-top: 12px; text-align: center;
-        pointer-events: none; 
-        z-index: 99999 !important;
-    }
-    </style>
-""", unsafe_allow_html=True)
-
-st.title("🐔 Automated Broiler Morphometrics")
-st.write("1-Meter Calibrated Rotated Contour & Convex Hull Profiling")
-
-# --- STEP 1: CAMERA INPUT ---
-st.info("Step 1: Align the chicken inside the clear blue dashed box at exactly 1 meter distance.")
-img_file = st.camera_input("Capture Broiler Image")
-
-if img_file is not None:
-    raw_pil_image = Image.open(img_file)
-    st.divider()
-    
-    # --- STEP 2: FEATURE SELECTION & INTERACTIVE CROP ---
-    st.subheader("Step 2: Select Morphometric Target")
-    feature_type = st.selectbox(
-        "Select the feature to measure:",
-        ["Body Length", "Wingspan", "Shank Length"]
-    )
-    
-    st.write(f"Drag the red box tightly around the **{feature_type}**.")
-
-    cropped_feature = st_cropper(
-        raw_pil_image, 
-        realtime_update=True, 
-        box_color='#FF0000', 
-        aspect_ratio=None
-    )
-    
-    if cropped_feature:
-        feature_cv2 = np.array(cropped_feature)
-        feature_cv2 = cv2.cvtColor(feature_cv2, cv2.COLOR_RGB2BGR)
+    if results[0].masks is not None:
+        # Extract Mask and Geometric Contours
+        mask_coords = results[0].masks.xy[0] 
+        contour = mask_coords.astype(np.int32) 
         
-        # --- PERFORMANCE MATRIX DOWNSAMPLING ---
-        h_orig, w_orig = feature_cv2.shape[:2]
-        max_dimension = 350  
-        scale_factor = 1.0
+        # Raw pixel calculations
+        raw_psa = cv2.contourArea(contour)
+        rect = cv2.minAreaRect(contour)
+        (_, _), (w, h), _ = rect
+        raw_l_max = max(w, h)
+        raw_l_min = min(w, h)
         
-        if max(h_orig, w_orig) > max_dimension:
-            scale_factor = max_dimension / max(h_orig, w_orig)
-            processing_img = cv2.resize(feature_cv2, (int(w_orig * scale_factor), int(h_orig * scale_factor)))
+        # 3. ArUco Marker Detection & Fallback Logic
+        marker_detected = False
+        cm_per_pixel = 0.0
+        gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        
+        try:
+            # For newer OpenCV versions (4.7+)
+            aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
+            aruco_params = cv2.aruco.DetectorParameters()
+            detector = cv2.aruco.ArucoDetector(aruco_dict, aruco_params)
+            corners, ids, _ = detector.detectMarkers(gray_frame)
+        except AttributeError:
+            # For older OpenCV versions (Raspberry Pi default in many cases)
+            aruco_dict = cv2.aruco.Dictionary_get(cv2.aruco.DICT_4X4_50)
+            aruco_params = cv2.aruco.DetectorParameters_create()
+            corners, ids, _ = cv2.aruco.detectMarkers(gray_frame, aruco_dict, parameters=aruco_params)
+
+        if corners and len(corners) > 0:
+            # PRIMARY METHOD: ArUco Marker Detected
+            marker_detected = True
+            st.success("✅ ArUco Marker detected! Using live optical scale calibration.")
+            
+            # Calculate pixel width of the marker (top-left to top-right corner)
+            top_left = corners[0][0][0]
+            top_right = corners[0][0][1]
+            pixel_width = np.linalg.norm(top_left - top_right)
+            
+            # Establish dynamic real-world scale
+            cm_per_pixel = MARKER_REAL_SIZE_CM / pixel_width
+            calculation_method = "ArUco Marker"
         else:
-            processing_img = feature_cv2.copy()
+            # FALLBACK METHOD: Manual Height
+            st.warning(f"⚠️ Marker hidden or missed. Falling back to manual height ({z_actual} cm).")
             
-        adjusted_pixels_per_cm = PIXELS_PER_CM * scale_factor
+            # Scale the baseline baseline ratio by the current camera height
+            cm_per_pixel = BASE_CM_PER_PIXEL_AT_1M * (z_actual / Z_REF)
+            calculation_method = "Manual Fallback"
+
+        # 4. Convert all pixel measurements to exact centimeters (cm & cm²)
+        final_psa = raw_psa * (cm_per_pixel ** 2)
+        final_l_max = raw_l_max * cm_per_pixel
+        final_l_min = raw_l_min * cm_per_pixel
+
+        # --- Visualizations ---
+        annotated = frame.copy()
+        cv2.drawContours(annotated, [contour], -1, (0, 255, 0), 2) # Draw chicken mask
         
-        # --- LOW-LIGHT NOISE FILTERING & OTSU SEGMENTATION ---
-        gray = cv2.cvtColor(processing_img, cv2.COLOR_BGR2GRAY)
-        filtered = cv2.bilateralFilter(gray, 9, 75, 75)
-        _, thresh = cv2.threshold(filtered, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        if marker_detected:
+            # Draw a box around the detected ArUco marker
+            cv2.aruco.drawDetectedMarkers(annotated, corners, ids)
+            
+        st.image(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB), caption=f"Segmentation Mode: {calculation_method}")
+
+        # --- Display Final Metrics ---
+        col1, col2, col3 = st.columns(3)
+        col1.metric("PSA (cm²)", f"{final_psa:.1f}")
+        col2.metric("L_max (cm)", f"{final_l_max:.1f}")
+        col3.metric("L_min (cm)", f"{final_l_min:.1f}")
         
-        kernel = np.ones((5,5), np.uint8)
-        clean_mask = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
-        
-        # --- BIOLOGICAL ROTATED AXIS & CONVEX HULL EXTRACTION ---
-        contours, _ = cv2.findContours(clean_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        if contours:
-            largest_contour = max(contours, key=cv2.contourArea)
+        # --- Save to CSV ---
+        if st.button("Save Data for Regression"):
+            new_data = {
+                "PSA_cm2": final_psa,
+                "L_max_cm": final_l_max,
+                "L_min_cm": final_l_min,
+                "Distance_cm": z_actual,
+                "Method": calculation_method,
+                "Weight_g": actual_weight
+            }
+            df = pd.DataFrame([new_data])
             
-            hull_scaled = cv2.convexHull(largest_contour)
-            rect_scaled = cv2.minAreaRect(hull_scaled)
-            box_pts_scaled = cv2.boxPoints(rect_scaled)
-            
-            rect_width, rect_height = rect_scaled[1]
-            chosen_pixel_dimension = max(rect_width, rect_height)
-            
-            automated_length_cm = chosen_pixel_dimension / adjusted_pixels_per_cm
-            measured_area_cm2 = cv2.contourArea(hull_scaled) / (adjusted_pixels_per_cm ** 2)
-            
-            dist01 = np.linalg.norm(box_pts_scaled[0] - box_pts_scaled[1])
-            dist12 = np.linalg.norm(box_pts_scaled[1] - box_pts_scaled[2])
-            
-            if dist01 > dist12:
-                mid1 = (box_pts_scaled[0] + box_pts_scaled[3]) / 2.0
-                mid2 = (box_pts_scaled[1] + box_pts_scaled[2]) / 2.0
+            if not os.path.isfile(CSV_FILE):
+                df.to_csv(CSV_FILE, index=False)
             else:
-                mid1 = (box_pts_scaled[0] + box_pts_scaled[1]) / 2.0
-                mid2 = (box_pts_scaled[2] + box_pts_scaled[3]) / 2.0
+                df.to_csv(CSV_FILE, mode='a', header=False, index=False)
                 
-            hull_display = (hull_scaled / scale_factor).astype(np.int32)
-            box_display = (box_pts_scaled / scale_factor).astype(np.int32)
-            pt1 = (int(mid1[0] / scale_factor), int(mid1[1] / scale_factor))
-            pt2 = (int(mid2[0] / scale_factor), int(mid2[1] / scale_factor))
+            st.success(f"Data Logged Successfully! Total records: {len(pd.read_csv(CSV_FILE))}")
             
-            visual_output = feature_cv2.copy()
-            cv2.drawContours(visual_output, [box_display], 0, (0, 255, 0), 2)  
-            cv2.drawContours(visual_output, [hull_display], 0, (0, 255, 255), 1) 
-            cv2.line(visual_output, pt1, pt2, (255, 0, 0), 3)                 
-            
-            st.write("### Processing & Segmentation Results")
-            col_img1, col_img2 = st.columns(2)
-            with col_img1:
-                display_img = cv2.cvtColor(visual_output, cv2.COLOR_BGR2RGB)
-                st.image(display_img, caption=f"Rotated Biological Axis ({feature_type})")
-            with col_img2:
-                display_mask = cv2.resize(clean_mask, (w_orig, h_orig), interpolation=cv2.INTER_NEAREST)
-                st.image(display_mask, caption="Convex Hull Filter Mask (Used for Area)")
-            
-            c1, c2 = st.columns(2)
-            c1.metric(label="True Rotated Axis Length", value=f"{automated_length_cm:.2f} cm")
-            c2.metric(label="Convex Hull Surface Area", value=f"{measured_area_cm2:.2f} cm²")
-            
-            # --- STEP 3: DATABASE DATA LOGGER ---
-            st.divider()
-            st.subheader("Step 3: Log Data")
-            actual_weight = st.number_input("Actual Scale Weight (grams) for Database", min_value=0.0, step=0.1)
-            
-            # Formulate perfectly paired layout names
-            current_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            
-            data_to_save = pd.DataFrame([{
-                "Date/Time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "Feature Measured": feature_type,
-                "Length (cm)": round(automated_length_cm, 2),
-                "Surface Area (cm2)": round(measured_area_cm2, 2),
-                "Actual Weight (g)": actual_weight
-            }])
-            
-            csv = data_to_save.to_csv(index=False).encode('utf-8')
-            
-            # Layout the data download elements nicely side-by-side
-            col_btn1, col_btn2 = st.columns(2)
-            with col_btn1:
-                st.download_button(
-                    label="💾 Download CSV Entry",
-                    data=csv,
-                    file_name=f"broiler_metrics_{current_timestamp}.csv",
-                    mime="text/csv",
-                    use_container_width=True,
-                    type="primary"
-                )
-            with col_btn2:
-                raw_image_buffer = io.BytesIO()
-                raw_pil_image.save(raw_image_buffer, format="JPEG")
-                raw_image_bytes = raw_image_buffer.getvalue()
-                
-                st.download_button(
-                    label="📸 Download Clean Image",
-                    data=raw_image_bytes,
-                    file_name=f"broiler_raw_{current_timestamp}.jpg",
-                    mime="image/jpeg",
-                    use_container_width=True
-                )
-        else:
-            st.warning("No clear broiler silhouette detected inside the selection region. Readjust the red crop box.")
+    else:
+        st.error("No chicken detected by YOLO model. Adjust placement and retry.")
