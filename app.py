@@ -53,7 +53,8 @@ if img_file_buffer is not None:
     frame = cv2.imdecode(np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR)
 
     # 2. Run YOLO Instance Segmentation
-    results = model(frame)
+        # New line: Only detect if 60% confident or higher
+    results = model(frame, conf=0.6)
     
     if results[0].masks is not None:
         # Extract Mask and Geometric Contours
