@@ -3,6 +3,7 @@ import cv2
 import numpy as np
 import pandas as pd
 import streamlit as st
+import joblib
 from ultralytics import YOLO
 
 # Custom CSS to remove gray letterboxing borders from camera input
@@ -34,19 +35,31 @@ Z_REF = 100.0              # Baseline calibration height in cm (1 meter)
 # Baseline calibration pixel ratio
 BASE_CM_PER_PIXEL_AT_1M = 0.045 
 
-
+# --- Caching Models ---
 @st.cache_resource
-def load_model():
+def load_yolo_model():
     return YOLO("best.pt")
 
+@st.cache_resource
+def load_regression_models():
+    rf = None
+    gb = None
+    try:
+        rf = joblib.load('farm_ready_model_RandomForest.pkl')
+        gb = joblib.load('farm_ready_model_GradientBoosting.pkl')
+    except Exception as e:
+        st.error(f"⚠️ Could not load regression models. Ensure the .pkl files are in the directory. Error: {e}")
+    return rf, gb
 
-model = load_model()
+# Load models into memory
+model = load_yolo_model()
+rf_model, gb_model = load_regression_models()
 
-st.title("Chicken Feature Extraction (ArUco & Fallback)")
+st.title("Chicken Feature Extraction & Weight Prediction")
 
 # User Controls
 actual_weight = st.number_input(
-    "Enter Actual Scale Weight (g):", min_value=0.0, step=1.0
+    "Enter Actual Scale Weight (g) [For Data Collection]:", min_value=0.0, step=1.0
 )
 z_actual = st.number_input(
     "Camera Distance to Platform (cm):",
@@ -84,9 +97,7 @@ if img_file_buffer is not None:
 
         try:
             # For newer OpenCV versions (4.7+)
-            aruco_dict = cv2.aruco.getPredefinedDictionary(
-                cv2.aruco.DICT_4X4_50
-            )
+            aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
             aruco_params = cv2.aruco.DetectorParameters()
             detector = cv2.aruco.ArucoDetector(aruco_dict, aruco_params)
             corners, ids, _ = detector.detectMarkers(gray_frame)
@@ -101,9 +112,7 @@ if img_file_buffer is not None:
         # Check if any markers were found AND if Target ID 0 is among them
         if ids is not None and TARGET_MARKER_ID in ids.flatten():
             marker_detected = True
-            st.success(
-                f"✅ ArUco Marker (ID {TARGET_MARKER_ID}) detected! Using 10cm optical scale calibration."
-            )
+            st.success(f"✅ ArUco Marker (ID {TARGET_MARKER_ID}) detected! Using 10cm optical scale calibration.")
 
             # Locate index for ID 0
             id_index = np.where(ids.flatten() == TARGET_MARKER_ID)[0][0]
@@ -119,9 +128,7 @@ if img_file_buffer is not None:
             calculation_method = "ArUco Marker (10cm)"
         else:
             # FALLBACK METHOD: Manual Height
-            st.warning(
-                f"⚠️ Marker ID 0 hidden or missed. Falling back to manual height ({z_actual} cm)."
-            )
+            st.warning(f"⚠️ Marker ID 0 hidden or missed. Falling back to manual height ({z_actual} cm).")
 
             # Scale baseline ratio by current camera height
             cm_per_pixel = BASE_CM_PER_PIXEL_AT_1M * (z_actual / Z_REF)
@@ -134,9 +141,7 @@ if img_file_buffer is not None:
 
         # --- Visualizations ---
         annotated = frame.copy()
-        cv2.drawContours(
-            annotated, [contour], -1, (0, 255, 0), 2
-        )  # Draw object mask
+        cv2.drawContours(annotated, [contour], -1, (0, 255, 0), 2)  # Draw object mask
 
         if marker_detected:
             # Draw green square around detected ArUco marker ID 0
@@ -148,6 +153,49 @@ if img_file_buffer is not None:
             caption=f"Segmentation Mode: {calculation_method}",
         )
 
+        # --- ML Predictions ---
+        # Format features exactly as trained: [PSA, min_axial, max_axial]
+        X_input = np.array([[final_psa, final_l_min, final_l_max]])
+        
+        pred_rf = rf_model.predict(X_input)[0] if rf_model else 0.0
+        pred_gb = gb_model.predict(X_input)[0] if gb_model else 0.0
+
+        st.markdown("---")
+        st.subheader("🤖 AI Weight Predictions")
+        pred_col1, pred_col2 = st.columns(2)
+        pred_col1.metric("Random Forest (Primary)", f"{pred_rf:.1f} g", delta_color="off")
+        pred_col2.metric("Gradient Boosting", f"{pred_gb:.1f} g", delta_color="off")
+        st.markdown("---")
+
+        # --- Display Final Metrics ---
+        st.subheader("📐 Extracted Physical Metrics")
+        col1, col2, col3 = st.columns(3)
+        col1.metric("PSA (cm²)", f"{final_psa:.1f}")
+        col2.metric("L_max (cm)", f"{final_l_max:.1f}")
+        col3.metric("L_min (cm)", f"{final_l_min:.1f}")
+        st.markdown("---")
+
+        # --- Save to CSV ---
+        if st.button("Save Data & Predictions for Regression", use_container_width=True):
+            new_data = {
+                "PSA_cm2": final_psa,
+                "L_max_cm": final_l_max,
+                "L_min_cm": final_l_min,
+                "Distance_cm": z_actual,
+                "Method": calculation_method,
+                "Actual_Weight_g": actual_weight,
+                "Pred_RF_g": pred_rf,
+                "Pred_GB_g": pred_gb
+            }
+            df = pd.DataFrame([new_data])
+
+            if not os.path.isfile(CSV_FILE):
+                df.to_csv(CSV_FILE, index=False)
+            else:
+                df.to_csv(CSV_FILE, mode="a", header=False, index=False)
+
+            st.success(f"Data Logged Successfully! Total records: {len(pd.read_csv(CSV_FILE))}")
+
         # --- Download Button for Segmented Image ---
         _, img_buffer = cv2.imencode(".jpg", annotated)
         st.download_button(
@@ -157,33 +205,6 @@ if img_file_buffer is not None:
             mime="image/jpeg",
             use_container_width=True,
         )
-
-        # --- Display Final Metrics ---
-        col1, col2, col3 = st.columns(3)
-        col1.metric("PSA (cm²)", f"{final_psa:.1f}")
-        col2.metric("L_max (cm)", f"{final_l_max:.1f}")
-        col3.metric("L_min (cm)", f"{final_l_min:.1f}")
-
-        # --- Save to CSV ---
-        if st.button("Save Data for Regression", use_container_width=True):
-            new_data = {
-                "PSA_cm2": final_psa,
-                "L_max_cm": final_l_max,
-                "L_min_cm": final_l_min,
-                "Distance_cm": z_actual,
-                "Method": calculation_method,
-                "Weight_g": actual_weight,
-            }
-            df = pd.DataFrame([new_data])
-
-            if not os.path.isfile(CSV_FILE):
-                df.to_csv(CSV_FILE, index=False)
-            else:
-                df.to_csv(CSV_FILE, mode="a", header=False, index=False)
-
-            st.success(
-                f"Data Logged Successfully! Total records: {len(pd.read_csv(CSV_FILE))}"
-            )
 
         # --- Preview & Download Full CSV Dataset ---
         if os.path.exists(CSV_FILE):
@@ -197,7 +218,7 @@ if img_file_buffer is not None:
             # Download button for CSV data
             csv_bytes = df_all.to_csv(index=False).encode("utf-8")
             st.download_button(
-                label="📥 Download Dataset (CSV)",
+                label="📥 Download Full Dataset (CSV)",
                 data=csv_bytes,
                 file_name="regression_dataset.csv",
                 mime="text/csv",
@@ -205,6 +226,4 @@ if img_file_buffer is not None:
             )
 
     else:
-        st.error(
-            "No object detected by YOLO model. Adjust placement and retry."
-        )
+        st.error("No object detected by YOLO model. Adjust placement and retry.")
