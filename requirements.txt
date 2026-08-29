@@ -4,3 +4,5 @@ opencv-contrib-python-headless
 numpy
 pandas
 Pillow
+scikit-learn
+joblib
