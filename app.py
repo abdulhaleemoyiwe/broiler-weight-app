@@ -21,44 +21,38 @@ st.markdown(
         color: #FAFAFA;
     }
     
-    /* Force the camera input component to stack vertically */
-    [data-testid="stCameraInput"] {
-        display: flex !important;
-        flex-direction: column !important;
-    }
-    
+    /* Force the main camera container to stack its children vertically */
     [data-testid="stCameraInput"] > div {
         display: flex !important;
         flex-direction: column !important;
-        width: 100% !important;
+        background-color: transparent !important;
+        height: auto !important;
     }
 
-    /* Keep the video feed clear and positioned normally on top */
+    /* Keep the video feed clean and strictly at the top */
     [data-testid="stCameraInput"] video {
         position: relative !important;
-        width: 100% !important;
-        height: auto !important;
-        max-height: 55vh !important;
-        object-fit: cover !important;
         border-radius: 8px !important;
+        width: 100% !important;
     }
 
-    /* Pull the button out of the video overlay and push it down */
+    /* Strip the button of its floating status and push it down */
     [data-testid="stCameraInput"] button {
-        position: relative !important;
-        display: block !important;
+        position: relative !important; /* Stops it from floating over the video */
+        bottom: auto !important;       /* Resets Streamlit's default bottom anchor */
+        margin-top: 40px !important;   /* Creates the physical 2-3 cm gap */
+        margin-bottom: 10px !important;
         width: 100% !important;
         height: 50px !important;
-        margin-top: 25px !important; /* Creates the clear physical separation below the feed */
         background-color: #4CAF50 !important;
         color: white !important;
         font-size: 18px !important;
         font-weight: bold !important;
         border-radius: 8px !important;
         border: none !important;
-        z-index: 5 !important;
     }
-    
+
+    /* Add a slight hover effect for interactivity */
     [data-testid="stCameraInput"] button:hover {
         background-color: #45a049 !important;
     }
@@ -80,7 +74,7 @@ st.markdown(
     }
     </style>
     """,
-    unsafe_allow_html=True,
+    unsafe_allow_html=True
 )
 
 # --- System Constants ---
