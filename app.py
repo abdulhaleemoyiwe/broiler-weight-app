@@ -1,4 +1,3 @@
-import os
 import cv2
 import numpy as np
 import pandas as pd
@@ -6,20 +5,63 @@ import streamlit as st
 import joblib
 from ultralytics import YOLO
 
-# Custom CSS to remove gray letterboxing borders from camera input
+# --- Page Configuration & CSS Styling ---
+st.set_page_config(
+    page_title="Computer Vision Broiler Weight predictor", 
+    page_icon="🐔",  
+    layout="centered"
+   )
+
 st.markdown(
     """
     <style>
-    /* Make camera container full width and remove background padding */
+    /* Main background and font styling */
+    .stApp {
+        background-color: #0E1117;
+        color: #FAFAFA;
+    }
+    
+    /* Make the camera container clean and rounded */
     [data-testid="stCameraInput"] > div {
         background-color: transparent !important;
-        width: 100% !important;
+        border: 2px solid #4CAF50;
+        border-radius: 12px;
+        padding: 10px;
     }
-    /* Stretch video feed to eliminate side pillarboxes */
-    [data-testid="stCameraInput"] video {
-        object-fit: cover !important;
+    
+    /* Style the internal Streamlit Capture Button */
+    [data-testid="stCameraInput"] button {
+        background-color: #4CAF50 !important;
+        color: white !important;
+        font-size: 18px !important;
+        font-weight: bold !important;
+        padding: 10px 24px !important;
+        border-radius: 8px !important;
+        border: none !important;
         width: 100% !important;
+        margin-top: 10px !important;
+        transition: 0.3s;
+    }
+    
+    [data-testid="stCameraInput"] button:hover {
+        background-color: #45a049 !important;
+        transform: scale(1.02);
+    }
+
+    /* Output dashboard styling */
+    .prediction-box {
+        background-color: #1E2127;
+        border-left: 5px solid #4CAF50;
+        padding: 20px;
         border-radius: 8px;
+        margin-top: 20px;
+        text-align: center;
+    }
+    .weight-text {
+        font-size: 42px;
+        font-weight: 900;
+        color: #4CAF50;
+        margin: 0;
     }
     </style>
     """,
@@ -27,12 +69,9 @@ st.markdown(
 )
 
 # --- System Constants ---
-CSV_FILE = "regression_data.csv"
-MARKER_REAL_SIZE_CM = 10.0  # Updated: 10cm x 10cm ArUco Marker
-TARGET_MARKER_ID = 0       # Updated: Specifically target ID 0
-Z_REF = 100.0              # Baseline calibration height in cm (1 meter)
-
-# Baseline calibration pixel ratio
+MARKER_REAL_SIZE_CM = 10.0  
+TARGET_MARKER_ID = 0       
+Z_REF = 100.0              
 BASE_CM_PER_PIXEL_AT_1M = 0.045 
 
 # --- Caching Models ---
@@ -41,42 +80,43 @@ def load_yolo_model():
     return YOLO("best.pt")
 
 @st.cache_resource
-def load_regression_models():
-    rf = None
-    gb = None
+def load_regression_model():
     try:
-        rf = joblib.load('farm_ready_model_RandomForest.pkl')
-        gb = joblib.load('farm_ready_model_GradientBoosting.pkl')
+        # Load the single best pipeline from your latest training
+        rf_pipeline = joblib.load('Random_Forest_model.pkl')
+        return rf_pipeline
     except Exception as e:
-        st.error(f"⚠️ Could not load regression models. Ensure the .pkl files are in the directory. Error: {e}")
-    return rf, gb
+        st.error(f"⚠️ Could not load Random Forest model. Check the file name. Error: {e}")
+        return None
 
 # Load models into memory
 model = load_yolo_model()
-rf_model, gb_model = load_regression_models()
+rf_model = load_regression_model()
 
-st.title("Chicken Feature Extraction & Weight Prediction")
+# --- App Header ---
+st.title("🐔 Computer Vision Broiler Weight predictor")
+st.markdown("Place the 10cm ArUco marker next to the chicken for automatic scale calibration.")
 
 # User Controls
-actual_weight = st.number_input(
-    "Enter Actual Scale Weight (g) [For Data Collection]:", min_value=0.0, step=1.0
-)
 z_actual = st.number_input(
-    "Camera Distance to Platform (cm):",
+    "Manual Camera Distance Fallback (cm):",
     min_value=10.0,
     max_value=300.0,
     value=100.0,
+    help="Only used if the ArUco marker is hidden or missed."
 )
 
-img_file_buffer = st.camera_input("Take Snapshot")
+st.markdown("### 📷 Live Camera Feed")
+img_file_buffer = st.camera_input("Take Snapshot (Button inside feed)")
 
 if img_file_buffer is not None:
     # 1. Load image from camera
     bytes_data = img_file_buffer.getvalue()
     frame = cv2.imdecode(np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR)
 
-    # 2. Run YOLO Instance Segmentation (Only detect if 70% confident or higher)
-    results = model(frame, conf=0.7)
+    # 2. Run YOLO Instance Segmentation 
+    with st.spinner("Processing image and running segmentation..."):
+        results = model(frame, conf=0.7)
 
     if results[0].masks is not None:
         # Extract Mask and Geometric Contours
@@ -90,140 +130,87 @@ if img_file_buffer is not None:
         raw_l_max = max(w, h)
         raw_l_min = min(w, h)
 
-        # 3. ArUco Marker Detection (DICT_4X4_50, Target ID 0)
+        # 3. ArUco Marker Detection
         marker_detected = False
         cm_per_pixel = 0.0
         gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
         try:
-            # For newer OpenCV versions (4.7+)
             aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
             aruco_params = cv2.aruco.DetectorParameters()
             detector = cv2.aruco.ArucoDetector(aruco_dict, aruco_params)
             corners, ids, _ = detector.detectMarkers(gray_frame)
         except AttributeError:
-            # For older OpenCV versions
             aruco_dict = cv2.aruco.Dictionary_get(cv2.aruco.DICT_4X4_50)
             aruco_params = cv2.aruco.DetectorParameters_create()
             corners, ids, _ = cv2.aruco.detectMarkers(
                 gray_frame, aruco_dict, parameters=aruco_params
             )
 
-        # Check if any markers were found AND if Target ID 0 is among them
         if ids is not None and TARGET_MARKER_ID in ids.flatten():
             marker_detected = True
-            st.success(f"✅ ArUco Marker (ID {TARGET_MARKER_ID}) detected! Using 10cm optical scale calibration.")
-
-            # Locate index for ID 0
             id_index = np.where(ids.flatten() == TARGET_MARKER_ID)[0][0]
             target_corners = corners[id_index][0]
-
-            # Calculate pixel width of the 10cm marker top edge (top-left to top-right)
-            top_left = target_corners[0]
-            top_right = target_corners[1]
-            pixel_width = np.linalg.norm(top_left - top_right)
-
-            # Establish dynamic real-world scale (10cm / width in pixels)
+            pixel_width = np.linalg.norm(target_corners[0] - target_corners[1])
             cm_per_pixel = MARKER_REAL_SIZE_CM / pixel_width
-            calculation_method = "ArUco Marker (10cm)"
+            calculation_method = "ArUco Optical Scale (High Accuracy)"
         else:
-            # FALLBACK METHOD: Manual Height
-            st.warning(f"⚠️ Marker ID 0 hidden or missed. Falling back to manual height ({z_actual} cm).")
-
-            # Scale baseline ratio by current camera height
             cm_per_pixel = BASE_CM_PER_PIXEL_AT_1M * (z_actual / Z_REF)
-            calculation_method = "Manual Fallback"
+            calculation_method = "Manual Height Fallback"
 
-        # 4. Convert all pixel measurements to exact centimeters (cm & cm²)
+        # 4. Convert to Physical Metrics & Calculate New Proxies
         final_psa = raw_psa * (cm_per_pixel**2)
         final_l_max = raw_l_max * cm_per_pixel
         final_l_min = raw_l_min * cm_per_pixel
+        volume_proxy = final_psa * final_l_max
+        psa_pow_1_5 = final_psa ** 1.5
 
         # --- Visualizations ---
         annotated = frame.copy()
-        cv2.drawContours(annotated, [contour], -1, (0, 255, 0), 2)  # Draw object mask
-
+        cv2.drawContours(annotated, [contour], -1, (0, 255, 0), 3)  
         if marker_detected:
-            # Draw green square around detected ArUco marker ID 0
             cv2.aruco.drawDetectedMarkers(annotated, corners, ids)
 
-        # Display Segmented Image
+        # --- Dashboard Output ---
+        st.markdown("---")
+        st.subheader("Step 1: AI Segmentation Mask")
         st.image(
             cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB),
-            caption=f"Segmentation Mode: {calculation_method}",
+            caption=f"Calibrated via: {calculation_method}",
+            use_column_width=True
         )
 
-        # --- ML Predictions ---
-        # Format features exactly as trained: [PSA, min_axial, max_axial]
-        X_input = np.array([[final_psa, final_l_min, final_l_max]])
-        
-        pred_rf = rf_model.predict(X_input)[0] if rf_model else 0.0
-        pred_gb = gb_model.predict(X_input)[0] if gb_model else 0.0
-
-        st.markdown("---")
-        st.subheader("🤖 AI Weight Predictions")
-        pred_col1, pred_col2 = st.columns(2)
-        pred_col1.metric("Random Forest (Primary)", f"{pred_rf:.1f} g", delta_color="off")
-        pred_col2.metric("Gradient Boosting", f"{pred_gb:.1f} g", delta_color="off")
-        st.markdown("---")
-
-        # --- Display Final Metrics ---
-        st.subheader("📐 Extracted Physical Metrics")
+        st.subheader("Step 2: Extracted Proxy Parameters")
         col1, col2, col3 = st.columns(3)
-        col1.metric("PSA (cm²)", f"{final_psa:.1f}")
-        col2.metric("L_max (cm)", f"{final_l_max:.1f}")
-        col3.metric("L_min (cm)", f"{final_l_min:.1f}")
-        st.markdown("---")
+        col1.metric("Surface Area (PSA)", f"{final_psa:.1f} cm²")
+        col2.metric("Max Length", f"{final_l_max:.1f} cm")
+        col3.metric("Volume Proxy", f"{volume_proxy:.1f} cm³")
 
-        # --- Save to CSV ---
-        if st.button("Save Data & Predictions for Regression", use_container_width=True):
-            new_data = {
-                "PSA_cm2": final_psa,
-                "L_max_cm": final_l_max,
-                "L_min_cm": final_l_min,
-                "Distance_cm": z_actual,
-                "Method": calculation_method,
-                "Actual_Weight_g": actual_weight,
-                "Pred_RF_g": pred_rf,
-                "Pred_GB_g": pred_gb
-            }
-            df = pd.DataFrame([new_data])
+        # --- ML Prediction ---
+        if rf_model:
+            # Format exactly as the new pipeline expects using a DataFrame
+            input_df = pd.DataFrame([{
+                'projected_surface_area_cm2': final_psa,
+                'min_axial_length_cm': final_l_min,
+                'max_axial_length_cm': final_l_max,
+                'volume_proxy_cm3': volume_proxy,
+                'psa_pow_1_5': psa_pow_1_5
+            }])
+            
+            pred_weight = rf_model.predict(input_df)[0]
 
-            if not os.path.isfile(CSV_FILE):
-                df.to_csv(CSV_FILE, index=False)
-            else:
-                df.to_csv(CSV_FILE, mode="a", header=False, index=False)
-
-            st.success(f"Data Logged Successfully! Total records: {len(pd.read_csv(CSV_FILE))}")
-
-        # --- Download Button for Segmented Image ---
-        _, img_buffer = cv2.imencode(".jpg", annotated)
-        st.download_button(
-            label="📸 Download Segmented Image",
-            data=img_buffer.tobytes(),
-            file_name="segmented_capture.jpg",
-            mime="image/jpeg",
-            use_container_width=True,
-        )
-
-        # --- Preview & Download Full CSV Dataset ---
-        if os.path.exists(CSV_FILE):
-            st.markdown("---")
-            st.subheader("📊 Logged Regression Dataset")
-            df_all = pd.read_csv(CSV_FILE)
-
-            # Display dataset table on screen
-            st.dataframe(df_all, use_container_width=True)
-
-            # Download button for CSV data
-            csv_bytes = df_all.to_csv(index=False).encode("utf-8")
-            st.download_button(
-                label="📥 Download Full Dataset (CSV)",
-                data=csv_bytes,
-                file_name="regression_dataset.csv",
-                mime="text/csv",
-                use_container_width=True,
+            st.markdown("### Step 3: Final Weight Estimation")
+            st.markdown(
+                f"""
+                <div class="prediction-box">
+                    <p style="font-size:18px; margin-bottom:0; color:#AAAAAA;">Random Forest Regression Output</p>
+                    <p class="weight-text">{pred_weight:.1f} grams</p>
+                </div>
+                """,
+                unsafe_allow_html=True
             )
+        else:
+            st.error("Model not loaded. Please check the backend.")
 
     else:
-        st.error("No object detected by YOLO model. Adjust placement and retry.")
+        st.error("⚠️ No object detected by the YOLO model. Adjust the camera angle and try again.")
