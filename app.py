@@ -12,8 +12,6 @@ st.set_page_config(
     layout="centered"
 )
 
-St.markdown(f'<link rel="manifest" href="https://raw.githubusercontent.com/abdulhaleemoyiwe/broiler-weight-app/refs/heads/main/manifest%20(4).json">', unsafe_allow_html=True)
-
 st.markdown(
     """
     <style>
