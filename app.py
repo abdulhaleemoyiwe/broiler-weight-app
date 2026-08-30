@@ -10,7 +10,7 @@ st.set_page_config(
     page_title="Broiler Weight predictor", 
     page_icon="🐔",  
     layout="centered"
-   )
+)
 
 st.markdown(
     """
@@ -168,11 +168,20 @@ if img_file_buffer is not None:
         # --- Dashboard Output ---
         st.markdown("---")
         st.subheader("Step 1: AI Segmentation Mask")
-        st.image(
-            cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB),
-            caption=f"Calibrated via: {calculation_method}",
-            use_column_width=True
-        )
+        
+        # --- NEW SAFETY CHECK BLOCK ---
+        if annotated is not None:
+            try:
+                st.image(
+                    cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB),
+                    caption=f"Calibrated via: {calculation_method}",
+                    use_column_width=True
+                )
+            except Exception as e:
+                st.error(f"⚠️ Could not process image colors. The AI generated a false positive shape. Error: {e}")
+        else:
+            st.warning("⚠️ Could not generate the annotated image. Please try adjusting the camera angle.")
+        # ------------------------------
 
         st.subheader("Step 2: Extracted Proxy Parameters")
         col1, col2, col3 = st.columns(3)
