@@ -14,19 +14,35 @@ st.set_page_config(
 
 st.markdown(
     """
-    <style>
+        <style>
     /* Main background and font styling */
     .stApp {
         background-color: #0E1117;
         color: #FAFAFA;
     }
     
-    /* Make the camera container clean and rounded */
+    /* Force camera container to take full width */
+    [data-testid="stCameraInput"] {
+        width: 100% !important;
+    }
+    
     [data-testid="stCameraInput"] > div {
         background-color: transparent !important;
-        border: 2px solid #4CAF50;
-        border-radius: 12px;
-        padding: 10px;
+        width: 100% !important;
+        display: flex;
+        justify-content: center;
+    }
+
+    [data-testid="stCameraInput"] section {
+        width: 100% !important;
+    }
+    
+    /* Make video fill the container cleanly and remove side gaps */
+    [data-testid="stCameraInput"] video {
+        object-fit: cover !important;
+        width: 100% !important;
+        height: 100% !important;
+        border-radius: 8px;
     }
     
     /* Style the internal Streamlit Capture Button */
