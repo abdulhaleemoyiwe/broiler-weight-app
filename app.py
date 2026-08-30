@@ -7,7 +7,7 @@ from ultralytics import YOLO
 
 # --- Page Configuration & CSS Styling ---
 st.set_page_config(
-    page_title="Computer Vision Broiler Weight predictor", 
+    page_title="Broiler Weight predictor", 
     page_icon="🐔",  
     layout="centered"
    )
