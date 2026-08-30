@@ -14,48 +14,45 @@ st.set_page_config(
 
 st.markdown(
     """
-        <style>
+    <style>
     /* Main background and font styling */
     .stApp {
         background-color: #0E1117;
         color: #FAFAFA;
     }
     
-    /* Force camera container to take full width */
-    [data-testid="stCameraInput"] {
-        width: 100% !important;
-    }
-    
+    /* Force vertical stacking */
     [data-testid="stCameraInput"] > div {
         background-color: transparent !important;
-        width: 100% !important;
-        display: flex;
-        justify-content: center;
-    }
-
-    [data-testid="stCameraInput"] section {
+        display: flex !important;
+        flex-direction: column !important; 
         width: 100% !important;
     }
     
-    /* Make video fill the container cleanly and remove side gaps */
+    /* Make video fill the container cleanly */
     [data-testid="stCameraInput"] video {
         object-fit: cover !important;
         width: 100% !important;
-        height: 100% !important;
+        height: auto !important; 
         border-radius: 8px;
     }
     
-    /* Style the internal Streamlit Capture Button */
+    /* Style the Capture Button with a large top gap */
     [data-testid="stCameraInput"] button {
         background-color: #4CAF50 !important;
         color: white !important;
         font-size: 18px !important;
         font-weight: bold !important;
-        padding: 10px 24px !important;
         border-radius: 8px !important;
         border: none !important;
         width: 100% !important;
-        margin-top: 10px !important;
+        height: 50px !important; 
+        flex: none !important; 
+        
+        /* This creates the 2-3 cm separation */
+        margin-top: 60px !important; 
+        margin-bottom: 20px !important;
+        
         transition: 0.3s;
     }
     
