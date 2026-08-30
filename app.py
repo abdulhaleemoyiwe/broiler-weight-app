@@ -21,44 +21,46 @@ st.markdown(
         color: #FAFAFA;
     }
     
-    /* Force vertical stacking */
-    [data-testid="stCameraInput"] > div {
-        background-color: transparent !important;
+    /* Force the camera input component to stack vertically */
+    [data-testid="stCameraInput"] {
         display: flex !important;
-        flex-direction: column !important; 
-        width: 100% !important;
+        flex-direction: column !important;
     }
     
-    /* Make video fill the container cleanly */
+    [data-testid="stCameraInput"] > div {
+        display: flex !important;
+        flex-direction: column !important;
+        width: 100% !important;
+    }
+
+    /* Keep the video feed clear and positioned normally on top */
     [data-testid="stCameraInput"] video {
-        object-fit: cover !important;
+        position: relative !important;
         width: 100% !important;
-        height: auto !important; 
-        border-radius: 8px;
+        height: auto !important;
+        max-height: 55vh !important;
+        object-fit: cover !important;
+        border-radius: 8px !important;
     }
-    
-    /* Style the Capture Button with a large top gap */
+
+    /* Pull the button out of the video overlay and push it down */
     [data-testid="stCameraInput"] button {
+        position: relative !important;
+        display: block !important;
+        width: 100% !important;
+        height: 50px !important;
+        margin-top: 25px !important; /* Creates the clear physical separation below the feed */
         background-color: #4CAF50 !important;
         color: white !important;
         font-size: 18px !important;
         font-weight: bold !important;
         border-radius: 8px !important;
         border: none !important;
-        width: 100% !important;
-        height: 50px !important; 
-        flex: none !important; 
-        
-        /* This creates the 2-3 cm separation */
-        margin-top: 60px !important; 
-        margin-bottom: 20px !important;
-        
-        transition: 0.3s;
+        z-index: 5 !important;
     }
     
     [data-testid="stCameraInput"] button:hover {
         background-color: #45a049 !important;
-        transform: scale(1.02);
     }
 
     /* Output dashboard styling */
