@@ -21,42 +21,23 @@ st.markdown(
         color: #FAFAFA;
     }
     
-    /* Force the main camera container to stack its children vertically */
-    [data-testid="stCameraInput"] > div {
-        display: flex !important;
-        flex-direction: column !important;
-        background-color: transparent !important;
-        height: auto !important;
-    }
-    
-    /* Keep the video feed clean and strictly at the top */
+    /* 1. Clear, edge-to-edge camera feed (removes gray borders) */
     [data-testid="stCameraInput"] video {
-        position: relative !important;
-        border-radius: 8px !important;
         width: 100% !important;
-        height: 100% !important;
-        object-fit: cover !important; /* This is the magic line that removes the gray borders */
-    }
-    
+        height: auto !important;
+        object-fit: cover !important; 
+        border-radius: 8px !important;
     }
 
-    /* Strip the button of its floating status and push it down */
+    /* 2. Style the default overlay button to be green */
     [data-testid="stCameraInput"] button {
-        position: relative !important; /* Stops it from floating over the video */
-        bottom: auto !important;       /* Resets Streamlit's default bottom anchor */
-        margin-top: 40px !important;   /* Creates the physical 2-3 cm gap */
-        margin-bottom: 10px !important;
-        width: 100% !important;
-        height: 50px !important;
         background-color: #4CAF50 !important;
         color: white !important;
         font-size: 18px !important;
         font-weight: bold !important;
-        border-radius: 8px !important;
         border: none !important;
     }
 
-    /* Add a slight hover effect for interactivity */
     [data-testid="stCameraInput"] button:hover {
         background-color: #45a049 !important;
     }
