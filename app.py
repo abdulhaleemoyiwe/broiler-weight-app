@@ -82,7 +82,7 @@ def load_yolo_model():
 @st.cache_resource
 def load_regression_model():
     try:
-        # Load the single best pipeline from your latest training
+        # Load the single best pipeline from my latest training
         rf_pipeline = joblib.load('Random_Forest_model.pkl')
         return rf_pipeline
     except Exception as e:
