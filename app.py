@@ -28,12 +28,16 @@ st.markdown(
         background-color: transparent !important;
         height: auto !important;
     }
-
+    
     /* Keep the video feed clean and strictly at the top */
     [data-testid="stCameraInput"] video {
         position: relative !important;
         border-radius: 8px !important;
         width: 100% !important;
+        height: 100% !important;
+        object-fit: cover !important; /* This is the magic line that removes the gray borders */
+    }
+    
     }
 
     /* Strip the button of its floating status and push it down */
