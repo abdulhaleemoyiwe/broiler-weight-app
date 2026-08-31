@@ -175,7 +175,7 @@ if img_file_buffer is not None:
                 st.image(
                     cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB),
                     caption=f"Calibrated via: {calculation_method}",
-                    use_column_width=True
+                    use_container_width=True
                 )
             except Exception as e:
                 st.error(f"⚠️ Could not process image colors. The AI generated a false positive shape. Error: {e}")
