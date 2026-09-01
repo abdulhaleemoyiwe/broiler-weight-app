@@ -101,7 +101,7 @@ z_actual = st.number_input(
 )
 
 st.markdown("### 📷 Live Camera Feed")
-img_file_buffer = st.camera_input("Take Snapshot (Button inside feed)" resolution="480p")
+img_file_buffer = st.camera_input("Take Snapshot (Button inside feed)", resolution="480p")
 
 if img_file_buffer is not None:
     # 1. Load image from camera
